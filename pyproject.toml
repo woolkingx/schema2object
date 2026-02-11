@@ -32,4 +32,4 @@ Homepage = "https://github.com/woolkingx/schema2object"
 Issues = "https://github.com/woolkingx/schema2object/issues"
 
 [tool.hatch.build.targets.wheel]
-packages = ["python"]
+packages = ["schema2object"]
