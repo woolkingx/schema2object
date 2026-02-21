@@ -50,6 +50,10 @@ user = ObjectTree({'name': 'Alice'}, schema=schema)
 # Dot-access
 print(user.name)  # 'Alice'
 
+# Explicit schema access
+print(user.get_schema('age'))       # {'type': 'integer', 'minimum': 0}
+print(user.get_extensions('age'))   # {'x-docs': '...'} if present
+
 # Type checking on assignment
 user.age = 30      # ✓ OK
 user.age = 'thirty'  # ✗ Raises TypeError
@@ -65,8 +69,8 @@ user.email = 'invalid'  # ✗ Raises TypeError (pattern mismatch)
 
 **Schema keywords → attributes** (raw access):
 ```python
-schema = ObjectTree({'oneOf': [...], 'properties': {...}})
-schema.oneOf  # Get raw list
+schema = {'oneOf': [...], 'properties': {...}}
+schema['oneOf']  # Get raw list
 ```
 
 **Schema logic → methods** (computed access):
@@ -395,10 +399,13 @@ ObjectTree(data=None, *, schema=None, **kwargs)
 - `project()` → ObjectTree — Filter to schema fields
 - `contains(schema=None)` → bool — Array element check
 - `to_dict()` → dict — Unwrap to native Python
+- `get_schema(path=None)` → dict|Any — Read schema (dot path supported)
+- `get_extensions(path=None)` → dict — Read x-* extensions on schema
 
 **Properties:**
 - `is_mapping` → bool
 - `is_sequence` → bool
+- `schema` → dict|Any — Root schema as plain dict
 
 ### ObjectTreeEncoder
 

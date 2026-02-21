@@ -277,6 +277,41 @@ class ObjectTree(SchemaAPI, MutableMapping):
     def to_native(self) -> Union[Dict, List, Any]:
         return self.to_dict()
 
+    # --- Schema access ---
+
+    @property
+    def schema(self) -> Any:
+        """Return schema as plain dict (or raw schema if not mapping)."""
+        schema = object.__getattribute__(self, '_schema')
+        if isinstance(schema, ObjectTree):
+            return schema.to_dict()
+        return schema
+
+    def get_schema(self, path: str | None = None) -> Any:
+        """Get schema (or sub-schema) by dot path, e.g. 'address.zip'."""
+        schema = object.__getattribute__(self, '_schema')
+        if not isinstance(schema, ObjectTree):
+            return schema
+        if not path:
+            return schema.to_dict()
+        parts = [p for p in path.split('.') if p]
+        node: Any = schema
+        for part in parts:
+            if not isinstance(node, ObjectTree):
+                return None
+            props = node.get('properties')
+            if not isinstance(props, Mapping) or part not in props:
+                return None
+            node = props[part]
+        return node.to_dict() if isinstance(node, ObjectTree) else node
+
+    def get_extensions(self, path: str | None = None) -> dict:
+        """Return x-* extensions from schema (optionally by dot path)."""
+        node = self.get_schema(path)
+        if not isinstance(node, Mapping):
+            return {}
+        return {k: v for k, v in node.items() if isinstance(k, str) and k.startswith('x-')}
+
     # --- Properties ---
 
     @property

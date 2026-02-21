@@ -70,3 +70,16 @@ const pct = ((totalPass / total) * 100).toFixed(1)
 console.log(`Total: ${totalPass}/${total} (${pct}%)`)
 
 if (totalFail > 0) process.exit(1)
+
+// ─── Basic behavior: toDict excludes unknown fields ─────────────────────────
+const basicSchema = {
+  type: 'object',
+  properties: { name: { type: 'string' }, age: { type: 'integer' } },
+}
+const basic = new ObjectTree(basicSchema)
+basic.name = 'Alice'
+basic.age = 30
+basic.extra = 'ignored'
+if (JSON.stringify(basic.toDict()) !== JSON.stringify({ name: 'Alice', age: 30 })) {
+  throw new Error('toDict should exclude unknown fields')
+}

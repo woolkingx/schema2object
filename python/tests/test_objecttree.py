@@ -982,6 +982,38 @@ class TestErrorMessages:
         assert '.age' in reason
 
 
+# === Schema Access ===
+
+class TestSchemaAccess:
+    def test_get_schema_root_and_path(self):
+        schema = {
+            'type': 'object',
+            'properties': {
+                'age': {'type': 'integer', 'minimum': 0},
+                'name': {'type': 'string'},
+            }
+        }
+        o = ObjectTree({}, schema=schema)
+        root = o.get_schema()
+        assert isinstance(root, dict)
+        assert root['type'] == 'object'
+        assert o.get_schema('age')['minimum'] == 0
+        assert o.get_schema('missing') is None
+
+    def test_get_extensions(self):
+        schema = {
+            'type': 'object',
+            'properties': {
+                'age': {'type': 'integer', 'x-docs': 'Age in years', 'x-meta': {'ui': 'number'}},
+                'name': {'type': 'string'},
+            }
+        }
+        o = ObjectTree({}, schema=schema)
+        ex = o.get_extensions('age')
+        assert ex == {'x-docs': 'Age in years', 'x-meta': {'ui': 'number'}}
+        assert o.get_extensions('name') == {}
+
+
 # === Draft-07 Compliance Fixes ===
 
 class TestTypeUnion:

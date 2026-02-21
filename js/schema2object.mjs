@@ -244,86 +244,56 @@ function validateType(value, schema, path, root) {
 
 export class ObjectTree {
   #schema
-  #root    // top-level schema for $ref resolution
-  #values  // runtime instance values
+  #root   // top-level schema for $ref resolution
+  #value  // runtime instance value (non-object schema)
+  #data   // runtime instance value (object schema)
+  #path   // JSON pointer-ish path for error messages
 
-  constructor(schema, root) {
+  constructor(schema, root, path = '$') {
     this.#root = root ?? schema
+    this.#path = path
     // Resolve $ref once at construction — #schema is always the concrete schema
     this.#schema = (schema && schema.$ref) ? _resolveRef(schema.$ref, this.#root) : schema
-    this.#values = {}
-    if (typeof this.#schema === 'object' && this.#schema !== null) this._buildTree(this.#schema)
+    if (this.#isObjectNode()) {
+      this.#data = {}
+      this.#defineProperties(this.#schema)
+    }
   }
 
-  _buildTree(schema) {
-    const { properties, items } = schema
-
-    // Expose schema metadata as read-only properties (meta layer)
-    const metaKeys = ['type', 'minimum', 'maximum', 'exclusiveMinimum', 'exclusiveMaximum',
-                      'minLength', 'maxLength', 'pattern', 'enum', 'const', 'format',
-                      'description', 'default', 'required', 'title', 'multipleOf']
-    for (const key of metaKeys) {
-      if (key in schema) {
-        Object.defineProperty(this, key, {
-          value: schema[key], writable: false, enumerable: true, configurable: false,
-        })
-      }
-    }
-
-    // properties → both meta (tree.properties.age) and runtime (tree.age)
-    // tree.age always returns the child ObjectTree (the property's class)
-    // tree.age.value is the scalar instance value
-    if (properties) {
-      const propsNode = {}
-      for (const [key, subSchema] of Object.entries(properties)) {
-        const child = new ObjectTree(subSchema, this.#root)
-
-        // meta: tree.properties.age.minimum
-        Object.defineProperty(propsNode, key, {
-          get: () => child,
-          set: (v) => { child.value = v },
-          enumerable: true, configurable: false,
-        })
-
-        // runtime: tree.age → always the child ObjectTree
-        // tree.age = 30  sets tree.age.value = 30 (internalized in child)
-        Object.defineProperty(this, key, {
-          get: () => child,
-          set: (v) => { child.value = v },
-          enumerable: true, configurable: true,
-        })
-      }
-      Object.defineProperty(this, 'properties', {
-        value: propsNode, writable: false,
-        enumerable: false,   // hidden from runtime iteration
-        configurable: false,
-      })
-    }
-
-    // items schema node (meta)
-    if (items) {
-      const itemsTree = Array.isArray(items)
-        ? items.map(s => new ObjectTree(s, this.#root))
-        : new ObjectTree(items, this.#root)
-      Object.defineProperty(this, 'items', {
-        value: itemsTree, writable: false, enumerable: true, configurable: false,
+  #defineProperties(schema) {
+    const { properties } = schema
+    if (!properties) return
+    for (const [key, subSchema] of Object.entries(properties)) {
+      Object.defineProperty(this, key, {
+        get: () => this.#data[key],
+        set: (v) => {
+          validateType(v, subSchema, `${this.#path}.${key}`, this.#root)
+          this.#data[key] = v
+        },
+        enumerable: true, configurable: true,
       })
     }
   }
 
   // A node is an object node if it defines properties (with or without explicit type: 'object')
-  _isObjectNode() {
+  #isObjectNode() {
     return typeof this.#schema === 'object' && this.#schema !== null
       && (this.#schema.type === 'object' || this.#schema.properties !== undefined)
   }
 
   // ── value: runtime instance setter/getter ──────────────────────────────────
 
-  get value() { return this.#values['$value'] }
+  get value() {
+    return this.#isObjectNode() ? this.#data : this.#value
+  }
 
   set value(v) {
-    validateType(v, this.#schema, '$', this.#root)
-    this.#values['$value'] = v
+    validateType(v, this.#schema, this.#path, this.#root)
+    if (this.#isObjectNode()) {
+      this.#data = v && typeof v === 'object' && !Array.isArray(v) ? { ...v } : {}
+    } else {
+      this.#value = v
+    }
   }
 
   // ── Logic methods ──────────────────────────────────────────────────────────
@@ -380,10 +350,13 @@ export class ObjectTree {
       throw new TypeError('project: data must be an object')
     const props = this.#schema.properties
     const projected = new ObjectTree(this.#schema, this.#root)
-    if (props)
+    if (props) {
+      const out = {}
       for (const key of Object.keys(props))
         if (Object.prototype.hasOwnProperty.call(data, key))
-          projected[key] = data[key]
+          out[key] = data[key]
+      projected.value = out
+    }
     return projected
   }
 
@@ -401,19 +374,46 @@ export class ObjectTree {
 
   /** Runtime instance → plain object */
   toDict() {
-    if (this._isObjectNode()) {
+    if (this.#isObjectNode()) {
+      const props = this.#schema.properties
+      if (!props) return undefined
       const out = {}
-      for (const key of Object.keys(this.#schema.properties)) {
-        const v = this.properties[key].toDict()
+      for (const key of Object.keys(props)) {
+        const v = this.#data?.[key]
         if (v !== undefined) out[key] = v
       }
       return Object.keys(out).length ? out : undefined
     }
-    return this.#values['$value']
+    return this.#value
   }
 
   /** Schema definition → plain object */
-  schema() { return _schemaToDict(this.#schema) }
+  get schema() { return _schemaToDict(this.#schema) }
+
+  /** Explicit schema access by path: "age" or "address.zip" */
+  getSchema(path = '') {
+    if (!path) return this.schema
+    const parts = path.split('.').filter(Boolean)
+    let node = this.#schema
+    for (const part of parts) {
+      if (!node || typeof node !== 'object') return undefined
+      const props = node.properties
+      if (!props || !(part in props)) return undefined
+      node = props[part]
+    }
+    return _schemaToDict(node)
+  }
+
+  /** Return x-* extensions on a schema node (optionally by path) */
+  getExtensions(path = '') {
+    const node = path ? this.getSchema(path) : this.schema
+    if (!node || typeof node !== 'object') return {}
+    const out = {}
+    for (const [k, v] of Object.entries(node)) {
+      if (k.startsWith('x-')) out[k] = v
+    }
+    return out
+  }
 
   toJSON() { return JSON.stringify(this.toDict(), null, 2) }
 }
