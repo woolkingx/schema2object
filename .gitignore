@@ -57,6 +57,10 @@ venv.bak/
 *.swo
 *~
 
+# Rust
+target/
+Cargo.lock
+
 # OS
 .DS_Store
 Thumbs.db
