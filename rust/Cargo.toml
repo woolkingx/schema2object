@@ -1,6 +1,6 @@
 [package]
 name = "schema-value"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 description = "JSON Schema Draft-07 object wrapper — structure maps to accessors, logic maps to methods."
 

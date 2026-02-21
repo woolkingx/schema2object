@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "schema2object"
-version = "0.1.0"
+version = "0.2.0"
 description = "JSON Schema as object definition — structure maps to attributes, logic maps to methods."
 readme = "README.md"
 license = "MIT"

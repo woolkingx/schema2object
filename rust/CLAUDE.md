@@ -17,7 +17,7 @@ Like Python's ObjectTree: you give it a schema, it **becomes** that object. Vali
 
 Previous name `schema-value` reflected a "value wrapper" mindset. The correct identity is `schema2object` — schema becomes object definition. This aligns with the Python implementation and the project's cross-language vision.
 
-## Current State (v0.1 — to be rewritten)
+## Current State (v0.2 — rewritten)
 
 Current implementation treats SchemaValue as a value wrapper:
 - `Index<&str>` returns `&Value` (breaks schema propagation)
