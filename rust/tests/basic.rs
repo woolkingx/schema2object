@@ -56,29 +56,22 @@ fn extractors() {
     assert_eq!(SchemaValue::without_schema(json!("hi")).as_str(), Some("hi"));
 }
 
-// --- Index traits ---
+// --- Accessors ---
 
 #[test]
-fn index_str_hit_and_miss() {
+fn get_hit_and_miss() {
     let sv = SchemaValue::without_schema(json!({"a": 1, "b": "two"}));
-    assert_eq!(sv["a"], json!(1));
-    assert_eq!(sv["b"], json!("two"));
-    assert_eq!(sv["missing"], Value::Null); // no panic
+    assert_eq!(sv.get("a").unwrap().to_value(), json!(1));
+    assert_eq!(sv.get("b").unwrap().to_value(), json!("two"));
+    assert!(sv.get("missing").is_none());
 }
 
 #[test]
-fn index_usize_hit_and_miss() {
+fn get_index_hit_and_miss() {
     let sv = SchemaValue::without_schema(json!([10, 20, 30]));
-    assert_eq!(sv[0], json!(10));
-    assert_eq!(sv[2], json!(30));
-    assert_eq!(sv[999], Value::Null); // no panic
-}
-
-#[test]
-fn index_on_wrong_type_returns_null() {
-    let sv = SchemaValue::without_schema(json!(42));
-    assert_eq!(sv["key"], Value::Null);
-    assert_eq!(sv[0], Value::Null);
+    assert_eq!(sv.get_index(0).unwrap().to_value(), json!(10));
+    assert_eq!(sv.get_index(2).unwrap().to_value(), json!(30));
+    assert!(sv.get_index(999).is_none());
 }
 
 // --- PartialEq ---
@@ -162,7 +155,7 @@ fn get_index_propagates_items_schema() {
     });
     let sv = SchemaValue::new(json!([1, 2, 3]), schema);
     let elem = sv.get_index(1).unwrap();
-    assert_eq!(elem, json!(2));
+    assert_eq!(elem.to_value(), json!(2));
     assert_eq!(elem.schema().unwrap()["type"], json!("integer"));
 }
 
@@ -179,7 +172,7 @@ fn path_deep_traversal() {
     let sv = SchemaValue::without_schema(json!({
         "a": {"b": {"c": 42}}
     }));
-    assert_eq!(sv.path("a.b.c").unwrap(), json!(42));
+    assert_eq!(sv.path("a.b.c").unwrap().to_value(), json!(42));
 }
 
 #[test]
@@ -187,7 +180,7 @@ fn path_with_array_index() {
     let sv = SchemaValue::without_schema(json!({
         "users": [{"name": "Alice"}, {"name": "Bob"}]
     }));
-    assert_eq!(sv.path("users.1.name").unwrap(), json!("Bob"));
+    assert_eq!(sv.path("users.1.name").unwrap().to_value(), json!("Bob"));
 }
 
 #[test]
@@ -243,7 +236,7 @@ fn elements_iterates_array() {
     let sv = SchemaValue::without_schema(json!([10, 20, 30]));
     let elems: Vec<_> = sv.elements().collect();
     assert_eq!(elems.len(), 3);
-    assert_eq!(elems[1], json!(20));
+    assert_eq!(elems[1].to_value(), json!(20));
 }
 
 #[test]
@@ -279,15 +272,15 @@ fn set_validates_then_writes() {
     });
     let mut sv = SchemaValue::new(json!({}), schema);
     assert!(sv.set("age", json!(25)).is_ok());
-    assert_eq!(sv["age"], json!(25));
+    assert_eq!(sv.get("age").unwrap().to_value(), json!(25));
 
     // Constraint violation
     assert!(sv.set("age", json!(-1)).is_err());
-    assert_eq!(sv["age"], json!(25)); // unchanged
+    assert_eq!(sv.get("age").unwrap().to_value(), json!(25)); // unchanged
 
     // Type violation
     assert!(sv.set("age", json!("old")).is_err());
-    assert_eq!(sv["age"], json!(25)); // still unchanged
+    assert_eq!(sv.get("age").unwrap().to_value(), json!(25)); // still unchanged
 }
 
 #[test]

@@ -13,8 +13,8 @@ fn simple_defaults() {
         }
     });
     let sv = SchemaValue::new(json!({}), schema).with_defaults();
-    assert_eq!(sv["status"], json!("pending"));
-    assert_eq!(sv["priority"], json!(0));
+    assert_eq!(sv.get("status").unwrap().to_value(), json!("pending"));
+    assert_eq!(sv.get("priority").unwrap().to_value(), json!(0));
 }
 
 #[test]
@@ -26,7 +26,7 @@ fn existing_values_not_overwritten() {
         }
     });
     let sv = SchemaValue::new(json!({"status": "active"}), schema).with_defaults();
-    assert_eq!(sv["status"], json!("active"));
+    assert_eq!(sv.get("status").unwrap().to_value(), json!("active"));
 }
 
 #[test]
@@ -44,8 +44,8 @@ fn nested_defaults() {
         }
     });
     let sv = SchemaValue::new(json!({"config": {}}), schema).with_defaults();
-    assert_eq!(sv.path("config.retries").unwrap(), json!(3));
-    assert_eq!(sv.path("config.timeout").unwrap(), json!(5000));
+    assert_eq!(sv.path("config.retries").unwrap().to_value(), json!(3));
+    assert_eq!(sv.path("config.timeout").unwrap().to_value(), json!(5000));
 }
 
 #[test]
@@ -63,8 +63,8 @@ fn nested_partial_existing() {
         }
     });
     let sv = SchemaValue::new(json!({"config": {"retries": 10}}), schema).with_defaults();
-    assert_eq!(sv.path("config.retries").unwrap(), json!(10)); // kept
-    assert_eq!(sv.path("config.timeout").unwrap(), json!(5000)); // filled
+    assert_eq!(sv.path("config.retries").unwrap().to_value(), json!(10)); // kept
+    assert_eq!(sv.path("config.timeout").unwrap().to_value(), json!(5000)); // filled
 }
 
 #[test]
@@ -77,7 +77,7 @@ fn no_default_no_fill() {
         }
     });
     let sv = SchemaValue::new(json!({}), schema).with_defaults();
-    assert_eq!(sv["age"], json!(0));
+    assert_eq!(sv.get("age").unwrap().to_value(), json!(0));
     // "name" has no default, stays absent
     assert!(sv.get("name").is_none());
 }
@@ -106,8 +106,8 @@ fn mixed_defaults_and_existing() {
         }
     });
     let sv = SchemaValue::new(json!({"b": "world"}), schema).with_defaults();
-    assert_eq!(sv["a"], json!(10));       // filled
-    assert_eq!(sv["b"], json!("world"));  // kept
+    assert_eq!(sv.get("a").unwrap().to_value(), json!(10));       // filled
+    assert_eq!(sv.get("b").unwrap().to_value(), json!("world"));  // kept
     assert!(sv.get("c").is_none());       // no default in schema
 }
 
@@ -126,6 +126,6 @@ fn defaults_then_validate() {
     // Empty data would fail required, but after defaults it should pass
     let sv = SchemaValue::new(json!({}), schema).with_defaults();
     assert!(sv.validate().is_ok());
-    assert_eq!(sv["mode"], json!("auto"));
-    assert_eq!(sv["retries"], json!(3));
+    assert_eq!(sv.get("mode").unwrap().to_value(), json!("auto"));
+    assert_eq!(sv.get("retries").unwrap().to_value(), json!(3));
 }

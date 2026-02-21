@@ -1,8 +1,8 @@
-//! # schema-value
+//! # schema2object (Rust)
 //!
-//! JSON Schema Draft-07 object wrapper for Rust.
+//! JSON Schema Draft-07 object definition for Rust.
 //!
-//! Structure maps to accessors, logic maps to methods.
+//! Schema defines the class. Data is the instance.
 //!
 //! ```
 //! use schema_value::SchemaValue;
@@ -17,7 +17,8 @@
 //! });
 //!
 //! let mut sv = SchemaValue::new(json!({"name": "Alice"}), schema);
-//! assert_eq!(sv["name"], json!("Alice"));
+//! sv.set("age", json!(30)).unwrap();
+//! assert_eq!(sv.get("name").unwrap().to_value(), json!("Alice"));
 //! ```
 
 pub mod error;

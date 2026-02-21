@@ -93,9 +93,7 @@ fn all_of_merges_schemas() {
     assert!(props.get("name").is_some());
     assert!(props.get("age").is_some());
     // Required merged without duplicates
-    let req: Vec<_> = ms["required"]
-        .as_array()
-        .unwrap()
+    let req: Vec<_> = ms.get("required").unwrap().as_array().unwrap()
         .iter()
         .filter_map(|v| v.as_str())
         .collect();
@@ -175,7 +173,8 @@ fn project_keeps_only_schema_properties() {
         schema,
     );
     let projected = sv.project().unwrap();
-    let obj = projected.as_value().as_object().unwrap();
+    let data = projected.to_value();
+    let obj = data.as_object().unwrap();
     assert_eq!(obj.len(), 2);
     assert!(obj.contains_key("name"));
     assert!(obj.contains_key("age"));
@@ -191,7 +190,8 @@ fn project_auto_resolves_one_of() {
     });
     let sv = SchemaValue::new(json!({"type": "a", "x": 1, "extra": true}), schema);
     let projected = sv.project().unwrap();
-    let obj = projected.as_value().as_object().unwrap();
+    let data = projected.to_value();
+    let obj = data.as_object().unwrap();
     assert!(obj.contains_key("type"));
     assert!(obj.contains_key("x"));
     assert!(!obj.contains_key("extra"));
