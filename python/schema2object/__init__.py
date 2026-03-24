@@ -1,4 +1,4 @@
 """schema2object — JSON Schema as object definition."""
-from .tree import ObjectTree, ObjectTreeEncoder
+from .schema2object import ObjectTree, validate
 
-__all__ = ['ObjectTree', 'ObjectTreeEncoder']
+__all__ = ['ObjectTree', 'validate']

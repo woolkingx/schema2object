@@ -1,5 +1,4 @@
-# Claude Code local files
-.claude/
+# Claude Code local files (tracked — master is local only)
 
 # Working directories
 .cleanup/
@@ -70,8 +69,6 @@ Cargo.lock
 Thumbs.db
 
 # Private/local-only
-**/CLAUDE.md
-AGENTS.md
 .cleanup/
 **/.cleanup/
 .pytest_cache/

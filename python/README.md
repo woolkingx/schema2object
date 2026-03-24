@@ -1,16 +1,16 @@
-# schema2object
+# schema2object — Python
 
-JSON Schema Draft-07 as object definition in Python.
+**JSON Schema Draft-07 is the object class definition.**
 
-`ObjectTree` restores methods: the schema defines the class, the data is the instance.
+`ObjectTree(data, schema=schema)` — if `data` violates `schema`, this raises. The schema is the class contract, not a hint. Construction validates. Mutation validates. No exceptions.
 
 ## Core Semantics
 
-- Schema defines the class; data is the instance
-- Mutation validates
-- Unknown fields may exist at runtime (native Python behavior)
-- `to_dict()` exports schema-defined fields only
-- Schema extensions live in `x-*` (e.g. `x-docs`, `x-tests`)
+- **Construction validates** — invalid data cannot produce a valid instance
+- **Mutation validates** — every write is checked before storage
+- **`to_dict()` projects** — only schema-defined fields serialize out
+- **Unknown fields are allowed** — extra runtime fields exist but are invisible to `to_dict()`
+- **Draft-07 is the target** — all keywords, 100% of the official test suite
 
 ## Install
 
@@ -95,7 +95,7 @@ json.dumps(obj, cls=ObjectTreeEncoder)
 ## Tests
 
 ```bash
-python -m pytest tests/test_objecttree.py -v
+python -m pytest tests/ -q
 ```
 
 ## See Also

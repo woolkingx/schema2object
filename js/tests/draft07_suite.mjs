@@ -14,6 +14,7 @@ import { ObjectTree } from '../schema2object.mjs'
 
 const __dir = dirname(fileURLToPath(import.meta.url))
 const SUITE_DIR = join(__dir, '../../draft-07')
+const SCHEMA_ROOT = join(__dir, '../../draft-07-remotes/dummy.json')  // dirname → draft-07-remotes/
 
 // ─── Runner ───────────────────────────────────────────────────────────────────
 
@@ -34,7 +35,7 @@ for (const file of files) {
     for (const tc of group.tests) {
       let threw = false
       try {
-        new ObjectTree(tc.data, group.schema)
+        new ObjectTree(tc.data, group.schema, SCHEMA_ROOT)
       } catch {
         threw = true
       }
