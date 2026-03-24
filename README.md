@@ -1,11 +1,21 @@
 # schema2object
 
-**JSON Schema Draft-07 is the object class definition.**
+**JSON Schema as header file. Like C's `.h`, like TypeScript's type system — but at runtime, cross-language, and removable.**
+
+| | TypeScript | C `.h` | schema2object |
+|--|-----------|--------|---------------|
+| Type definition | `.ts` file, erased at compile | `.h` file, compile-time only | JSON Schema, lives at runtime |
+| Validation | compile-time only, runtime naked | compile-time only | construction IS validation |
+| Cross-language | JS only | C/C++ only | JSON Schema = language-agnostic |
+| Removable | no, build step required | no, compilation required | yes — mature code runs without it, zero overhead |
+| Self-describing | no | no | schema is machine-readable documentation |
 
 Not a validator. Not a hint. The schema *is* the class — data is the instance.
 
 JSON came from JavaScript objects. Serialization stripped the methods.
 `schema2object` restores them: bind a Draft-07 schema to a runtime object and the schema enforces itself — invalid data cannot become an instance, invalid writes cannot reach storage, and Draft-07 logic keywords become callable methods.
+
+**Use it as scaffolding**: develop with full schema validation, then remove it when mature — the contracts are already baked into your code. [bashjsast](https://codeberg.org/woolkingx/bashjsast) demonstrates this: built with schema2object, shipped as raw dict. 840x faster, zero regression.
 
 ## Core Semantics
 
@@ -22,14 +32,16 @@ Draft-07 combinators are the class's behavioral logic, not query operations on e
 
 | Draft-07 | JS method | Python method | Semantics |
 |----------|-----------|---------------|-----------|
-| `oneOf` | `oneOf()` | `one_of()` | XOR — re-bind to the single matching sub-schema |
-| `anyOf` | `anyOf()` | `any_of()` | OR — re-bind to all matching sub-schemas |
-| `allOf` | `allOf()` | `all_of()` | AND — re-bind to merged schema |
-| `not` | `notOf()` | `not_of()` | NOT — true if instance does not match |
-| `if/then/else` | `ifThen()` | `if_then()` | CASE WHEN — re-bind to the matching branch |
-| `properties` | `project()` | `project()` | SELECT — keep only schema-defined fields |
-| `contains` | `contains()` | `contains()` | EXISTS — true if any array element matches |
-| `default` | `withDefaults()` | `with_defaults()` | fill missing fields from schema defaults |
+| `oneOf` | `$oneOf()` | `one_of()` | XOR — re-bind to the single matching sub-schema |
+| `anyOf` | `$anyOf()` | `any_of()` | OR — re-bind to all matching sub-schemas |
+| `allOf` | `$allOf()` | `all_of()` | AND — re-bind to merged schema |
+| `not` | `$notOf()` | `not_of()` | NOT — true if instance does not match |
+| `if/then/else` | `$ifThen()` | `if_then()` | CASE WHEN — re-bind to the matching branch |
+| `properties` | `$project()` | `project()` | SELECT — keep only schema-defined fields |
+| `contains` | `$contains()` | `contains()` | EXISTS — true if any array element matches |
+| `default` | `$withDefaults()` | `with_defaults()` | fill missing fields from schema defaults |
+
+> **JS naming convention**: All ObjectTree API methods use `$` prefix (`$value`, `$schema`, `$toDict()`, etc.). Data properties have no prefix (`tree.name`, `tree.email`). This avoids collision when schema property names match API method names.
 
 ## Implementations
 
@@ -41,7 +53,7 @@ Draft-07 combinators are the class's behavioral logic, not query operations on e
 
 ## Philosophy
 
-See [schema-driven-development](https://github.com/woolkingx/schema-driven-development) for the full methodology.
+See [schema-driven-development](https://codeberg.org/woolkingx/schema-driven-development) for the full methodology.
 
 ## License
 

@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.3.0] - 2026-03-17
+
+### Breaking Changes (JS only)
+- **`$` prefix on all ObjectTree API** — `value` → `$value`, `toDict()` → `$toDict()`, `oneOf()` → `$oneOf()`, etc. Data properties keep no prefix (`tree.name`). Prevents collision when schema property names match API method names.
+
+### Added
+- **`toJSON()` protocol** (JS) — `JSON.stringify(tree)` now works correctly, recursively unwraps nested ObjectTree instances
+- **Invalid schema guard** (JS) — `validateType` rejects `null`/non-object schemas with clear error message
+
+### Fixed
+- **Eager nested wrapping** (JS) — nested objects eagerly wrapped as ObjectTree at construction, aligned with Python/Rust. Mutation at any depth validates against sub-schema.
+- **Default preservation** (JS) — constructor overlays data onto defaults instead of replacing; `set $value` also preserves defaults
+- **anyOf/oneOf sub-schema wrapping** (JS) — removed `isObj` guard; any object value is wrapped regardless of schema shape
+- **`$project()`** (JS) — uses constructor instead of direct `#data` assignment, ensuring nested wrapping
+
+### Changed
+- **`configurable: false`** (JS) — property descriptors block `delete` to prevent validation bypass
+
 ## [0.2.0] - 2026-03-14
 
 ### Added

@@ -16,10 +16,16 @@ from urllib.parse import urljoin, urlparse, unquote
 _MISSING = object()  # sentinel for "no value provided"
 
 _re_cache = {}
+_MAX_RE_CACHE = 100
 
 def _re(pat):
     if pat not in _re_cache:
-        _re_cache[pat] = re.compile(pat)
+        if len(_re_cache) >= _MAX_RE_CACHE:
+            _re_cache.clear()
+        try:
+            _re_cache[pat] = re.compile(pat)
+        except re.error:
+            raise TypeError(f'invalid regex pattern: {pat}')
     return _re_cache[pat]
 
 # ─── Deep equality ────────────────────────────────────────────────────────────
@@ -251,6 +257,9 @@ class Loader:
             m = re.match(r'^https?://[^/]+/(.*)$', doc_uri)
             file_path = m.group(1) if m else doc_uri
             full = os.path.join(r, file_path)
+            resolved_path = os.path.realpath(full)
+            if not resolved_path.startswith(os.path.realpath(r) + os.sep) and resolved_path != os.path.realpath(r):
+                raise TypeError(f'$ref path traversal blocked: {doc_uri}')
             if not os.path.exists(full):
                 full = full + '.json'
             try:
@@ -411,6 +420,8 @@ def validate_type(value, schema, path='$', loader=None):
         if max_items is not _MISSING and len(value) > max_items:
             raise TypeError(f'{path}: length {len(value)} > maxItems {max_items}')
         if unique_items:
+            if len(value) > 1000:
+                raise TypeError(f'{path}: uniqueItems check: array too large (max 1000)')
             all_primitive = all(v is None or not isinstance(v, (dict, list)) for v in value)
             if all_primitive:
                 tagged = [f'{type(v).__name__}:{v}' for v in value]
@@ -510,6 +521,12 @@ def validate_type(value, schema, path='$', loader=None):
 
 
 # ─── ObjectTree ───────────────────────────────────────────────────────────────
+# Runtime instance — schema-bound object with validated property access.
+# Use: tree = ObjectTree(data, schema=schema)
+#      tree.name              # read property (schema-aware)
+#      tree.name = 'foo'      # write property (auto-validates against schema)
+#      tree.one_of().type     # chain methods, stay in ObjectTree
+# NOT: d = tree.to_dict(); d['name'] = 'x'  ← loses schema binding
 
 class ObjectTree:
     """Schema-bound object. Data and schema are one identity.
@@ -734,6 +751,8 @@ class ObjectTree:
             return None
         return any(_soft_validate(item, cs, loader) for item in data)
 
+    # Batch output — serialize to plain dict for API/JSON/storage.
+    # Terminal operation: call once at the end, not for further manipulation.
     def to_dict(self):
         if self._is_object_node():
             schema = object.__getattribute__(self, '_ObjectTree__schema')
@@ -768,6 +787,7 @@ class ObjectTree:
             return {}
         return {k: v for k, v in node.items() if k.startswith('x-')}
 
+    # Batch output — serialize to JSON string. Terminal operation.
     def to_json(self):
         return json.dumps(self.to_dict(), indent=2)
 
@@ -797,7 +817,7 @@ def _apply_defaults(data, schema, loader):
     resolved = schema
     if '$ref' in schema:
         try:
-            resolved, _ = loader.resolve(schema['$ref'], schema.get('$id'))
+            resolved, _ = loader.resolve(schema['$ref'], loader.scope_of(schema), loader.resource_of(schema))
         except Exception:
             resolved = schema
     props = resolved.get('properties') if isinstance(resolved, dict) else None
@@ -807,7 +827,7 @@ def _apply_defaults(data, schema, loader):
         s = raw_s
         if isinstance(raw_s, dict) and '$ref' in raw_s:
             try:
-                s, _ = loader.resolve(raw_s['$ref'], raw_s.get('$id'))
+                s, _ = loader.resolve(raw_s['$ref'], loader.scope_of(raw_s), loader.resource_of(raw_s))
             except Exception:
                 s = raw_s
         if k in data:
@@ -825,6 +845,9 @@ def _apply_defaults(data, schema, loader):
     return data
 
 # ─── validate ─────────────────────────────────────────────────────────────────
+# Gate check — validates data against schema, returns {valid, error?}.
+# Does NOT construct an ObjectTree. Use as a pass/fail checkpoint only.
+# For runtime object with property access, use ObjectTree(data, schema=schema).
 
 def validate(data, schema, resolver=None):
     try:

@@ -23,6 +23,8 @@ fn unescape_pointer(s: &str) -> String {
     s.replace("~1", "/").replace("~0", "~")
 }
 
+const MAX_RE_CACHE: usize = 100;
+
 fn cached_regex(pattern: &str) -> Result<Regex, regex::Error> {
     thread_local! {
         static CACHE: RefCell<HashMap<String, Regex>> = RefCell::new(HashMap::new());
@@ -30,6 +32,7 @@ fn cached_regex(pattern: &str) -> Result<Regex, regex::Error> {
     CACHE.with(|cache| {
         let mut cache = cache.borrow_mut();
         if let Some(re) = cache.get(pattern) { return Ok(re.clone()); }
+        if cache.len() >= MAX_RE_CACHE { cache.clear(); }
         let re = Regex::new(pattern)?;
         cache.insert(pattern.to_string(), re.clone());
         Ok(re)
@@ -357,6 +360,14 @@ impl Loader {
         } else { doc_uri };
 
         let full_path = format!("{dir}/{path_part}");
+        let resolved = std::fs::canonicalize(&full_path)
+            .or_else(|_| std::fs::canonicalize(format!("{full_path}.json")))
+            .unwrap_or_else(|_| std::path::PathBuf::from(&full_path));
+        let base_dir = std::fs::canonicalize(dir).unwrap_or_else(|_| std::path::PathBuf::from(dir));
+        if !resolved.starts_with(&base_dir) {
+            return Err(ValidationError::new("$", ErrorKind::TypeError,
+                format!("$ref path traversal blocked: {doc_uri}")));
+        }
         let content = std::fs::read_to_string(&full_path)
             .or_else(|_| std::fs::read_to_string(format!("{full_path}.json")))
             .map_err(|_| ValidationError::new("$", ErrorKind::TypeError,
@@ -582,6 +593,10 @@ fn check_array(
             format!("array length {} > maxItems {max}", arr.len()))); }
     }
     if schema.get("uniqueItems").and_then(|v| v.as_bool()) == Some(true) {
+        if arr.len() > 1000 {
+            return Err(ValidationError::new(path, ErrorKind::UniqueItems,
+                "uniqueItems check: array too large (max 1000)"));
+        }
         for i in 0..arr.len() {
             for j in (i + 1)..arr.len() {
                 if deep_equal(&arr[i], &arr[j]) {
@@ -730,6 +745,12 @@ fn check_object(
 }
 
 // ─── ObjectTree ───────────────────────────────────────────────────────────────
+// Runtime instance — schema-bound object with validated property access.
+// Use: let tree = ObjectTree::new(data, schema);
+//      tree.get("name")           // read property (schema-aware)
+//      tree.set("name", val)?     // write property (auto-validates against schema)
+//      tree.one_of()?.get("type") // chain methods, stay in ObjectTree
+// NOT: let d = tree.to_dict(); /* manipulate d as raw Value */ ← loses schema binding
 
 pub struct ObjectTree {
     data: Value,
@@ -760,7 +781,7 @@ impl ObjectTree {
         let loader = Loader::new(schema, resolver);
         validate_node(&data, loader.root(), "$", &loader)?;
         let mut data = data;
-        apply_defaults(&mut data, loader.root());
+        apply_defaults(&mut data, loader.root(), &loader);
         Ok(Self { data, loader })
     }
 
@@ -797,6 +818,8 @@ impl ObjectTree {
     }
 
     // ─── to_dict ──────────────────────────────────────────────────────────────
+    // Batch output — serialize to Value for API/JSON/storage.
+    // Terminal operation: call once at the end, not for further manipulation.
 
     pub fn to_dict(&self) -> Value {
         let schema = self.loader.root();
@@ -840,7 +863,7 @@ impl ObjectTree {
 
     pub fn with_defaults(self) -> Self {
         let mut data = self.data.clone();
-        apply_defaults(&mut data, self.loader.root());
+        apply_defaults(&mut data, self.loader.root(), &self.loader);
         Self::unchecked(data, self.loader)
     }
 
@@ -939,6 +962,7 @@ impl ObjectTree {
         Some(arr.iter().any(|item| validate_node(item, cs, "$", &self.loader).is_ok()))
     }
 
+    // Batch output — clone raw Value. Terminal operation.
     pub fn to_value(&self) -> Value { self.data.clone() }
 }
 
@@ -973,25 +997,37 @@ fn schema_to_dict(schema: &Value) -> Value {
     }
 }
 
-fn apply_defaults(data: &mut Value, schema: &Value) {
+fn apply_defaults(data: &mut Value, schema: &Value, loader: &Loader) {
     let props = match schema.get("properties").and_then(|p| p.as_object()) {
         Some(p) => p, None => return,
     };
     let obj = match data.as_object_mut() { Some(o) => o, None => return };
     for (key, prop_schema) in props {
+        // Resolve $ref to get the target schema (where default may live)
+        let resolved = if let Some(ref_str) = prop_schema.get("$ref").and_then(|v| v.as_str()) {
+            loader.resolve(ref_str, None, None).ok().map(|(v, _)| v)
+        } else { None };
+        let effective = resolved.unwrap_or(prop_schema);
         if obj.contains_key(key) {
             if let Some(child) = obj.get_mut(key) {
-                if child.is_object() && prop_schema.is_object() {
-                    apply_defaults(child, prop_schema);
+                if child.is_object() && effective.is_object() {
+                    apply_defaults(child, effective, loader);
                 }
             }
-        } else if let Some(default) = prop_schema.get("default") {
-            obj.insert(key.clone(), default.clone());
+        } else {
+            // Check default on original prop_schema first, then on resolved target
+            let default_val = prop_schema.get("default").or_else(|| effective.get("default"));
+            if let Some(default) = default_val {
+                obj.insert(key.clone(), default.clone());
+            }
         }
     }
 }
 
 // ─── validate (pub export) ────────────────────────────────────────────────────
+// Gate check — validates data against schema, returns Ok/Err.
+// Does NOT construct an ObjectTree. Use as a pass/fail checkpoint only.
+// For runtime object with property access, use ObjectTree::new(data, schema).
 
 pub fn validate(data: &Value, schema: &Value, resolver: Option<String>) -> Result<(), ValidationError> {
     let loader = Loader::new(schema.clone(), resolver);

@@ -7,10 +7,11 @@ Best practice: treat JSON Schema the same way you define a JS object class.
 ## Core Semantics
 
 - Schema defines the class; data is the instance
-- Mutation validates
+- Mutation validates — at any nesting depth (nested objects are ObjectTree instances)
 - Unknown fields may exist at runtime (native JS behavior)
-- `toDict()` exports schema-defined fields only
+- `$toDict()` exports schema-defined fields only
 - Schema extensions live in `x-*` (e.g. `x-docs`, `x-tests`)
+- All API methods use `$` prefix — data properties don't. No naming collision.
 
 ## API
 
@@ -30,16 +31,17 @@ const user = new ObjectTree({}, schema)
 
 user.email = 'alice@example.com'
 user.age = 30
-user.email        // 'alice@example.com'
-user.getSchema('age')      // { type: 'integer', minimum: 0 }
-user.getExtensions('email') // { 'x-docs': 'User email' }
-user.oneOf()     // XOR branch dispatch
-user.ifThen()    // conditional branch
-user.project()   // keep only schema-defined fields
-user.withDefaults() // apply schema defaults (object only)
+user.email               // 'alice@example.com' — data property (no prefix)
+user.$getSchema('age')   // { type: 'integer', minimum: 0 }
+user.$getExtensions('email') // { 'x-docs': 'User email' }
+user.$oneOf()            // XOR branch dispatch
+user.$ifThen()           // conditional branch
+user.$project()          // keep only schema-defined fields
+user.$withDefaults()     // apply schema defaults (object only)
 
-user.extra = 'ignored' // allowed at runtime
-user.toDict()    // schema-defined fields only
+user.$value              // full data as plain object
+user.$toDict()           // schema-defined fields only
+JSON.stringify(user)     // works — toJSON() protocol
 ```
 
 ## See Also

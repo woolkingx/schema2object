@@ -78,6 +78,6 @@ const basicSchema = {
   properties: { name: { type: 'string' }, age: { type: 'integer' } },
 }
 const basic = new ObjectTree({ name: 'Alice', age: 30, extra: 'ignored' }, basicSchema)
-if (JSON.stringify(basic.toDict()) !== JSON.stringify({ name: 'Alice', age: 30 })) {
-  throw new Error('toDict should exclude unknown fields')
+if (JSON.stringify(basic.$toDict()) !== JSON.stringify({ name: 'Alice', age: 30 })) {
+  throw new Error('$toDict should exclude unknown fields')
 }

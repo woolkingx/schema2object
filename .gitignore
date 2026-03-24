@@ -70,7 +70,12 @@ Thumbs.db
 
 # Private/local-only
 .cleanup/
+.cleanup_*
 **/.cleanup/
+**/.backup/
+draft-07/
+draft-07-remotes/
+docs/
 .pytest_cache/
 **/.pytest_cache/
 rust/target/

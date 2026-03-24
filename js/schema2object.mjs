@@ -5,14 +5,22 @@
  */
 
 import { readFileSync } from 'fs'
-import { join as pathJoin, dirname } from 'path'
+import { join as pathJoin, dirname, resolve } from 'path'
 
 // ─── Shared ──────────────────────────────────────────────────────────────────
 
 const _unicodeLen = s => [...s].length
 const _unescapePointer = p => p.replace(/~[01]/g, m => m === '~1' ? '/' : '~')
 const _reCache = new Map()
-const _re = pat => { if (!_reCache.has(pat)) _reCache.set(pat, new RegExp(pat)); return _reCache.get(pat) }
+const MAX_RE_CACHE = 100
+const _re = pat => {
+  if (!_reCache.has(pat)) {
+    if (_reCache.size >= MAX_RE_CACHE) _reCache.clear()
+    try { _reCache.set(pat, new RegExp(pat)) }
+    catch { throw new TypeError(`invalid regex pattern: ${pat}`) }
+  }
+  return _reCache.get(pat)
+}
 
 // ─── Deep equality ───────────────────────────────────────────────────────────
 
@@ -223,6 +231,10 @@ export class Loader {
       const m = docUri.match(/^https?:\/\/[^/]+\/(.*)$/)
       const filePath = m ? m[1] : docUri  // fallback: use URI as relative path
       let full = pathJoin(r, filePath)
+      const resolved = resolve(full)
+      if (!resolved.startsWith(resolve(r) + '/') && resolved !== resolve(r)) {
+        throw new TypeError(`$ref path traversal blocked: ${docUri}`)
+      }
       if (!this.#fileExists(full)) full = full + '.json'
       try { return JSON.parse(readFileSync(full, 'utf8')) }
       catch { throw new TypeError(`$ref file not found: ${full}`) }
@@ -260,8 +272,9 @@ const TYPE_CHECKS = {
 // ─── Core validator ──────────────────────────────────────────────────────────
 
 function validateType(value, schema, path = '$', loader) {
-  if (schema === true) return
+  if (schema === true || schema === undefined) return
   if (schema === false) throw new TypeError(`${path}: schema is false`)
+  if (schema === null || typeof schema !== 'object') throw new TypeError(`${path}: invalid schema (expected object or boolean, got ${schema === null ? 'null' : typeof schema})`)
 
   // $ref → resolve and delegate; sibling keywords ignored (Draft 4-7)
   if (schema.$ref !== undefined) {
@@ -332,6 +345,7 @@ function validateType(value, schema, path = '$', loader) {
     if (maxItems !== undefined && value.length > maxItems)
       throw new RangeError(`${path}: length ${value.length} > maxItems ${maxItems}`)
     if (uniqueItems) {
+      if (value.length > 1000) throw new TypeError(`${path}: uniqueItems check: array too large (max 1000)`)
       const allPrimitive = value.every(v => v === null || typeof v !== 'object')
       if (allPrimitive) {
         if (new Set(value.map(v => `${typeof v}:${v}`)).size !== value.length)
@@ -428,6 +442,12 @@ function validateType(value, schema, path = '$', loader) {
 }
 
 // ─── ObjectTree ──────────────────────────────────────────────────────────────
+// Runtime instance — schema-bound object with validated property access.
+// Use: const tree = new ObjectTree(data, schema)
+//      tree.name              // read property (schema-aware)
+//      tree.name = 'foo'      // write property (auto-validates against schema)
+//      tree.oneOf().type      // chain methods, stay in ObjectTree
+// NOT: const d = tree.toDict(); d.name = 'x'  ← loses schema binding
 
 export class ObjectTree {
   #schema
@@ -459,7 +479,17 @@ export class ObjectTree {
       this.#data = {}
       this.#defineProperties(this.#schema)
     }
-    if (data !== undefined) this.value = data
+    if (data !== undefined) {
+      validateType(data, this.#schema, this.#path, this.#loader)
+      if (this.#isObjectNode() && data && typeof data === 'object' && !Array.isArray(data)) {
+        const props = this.#schema.properties
+        for (const [k, val] of Object.entries(data))
+          this.#data[k] = props?.[k] && val && typeof val === 'object' && !Array.isArray(val)
+            ? new ObjectTree(val, props[k], this.#loader) : val
+      } else if (!this.#isObjectNode()) {
+        this.#value = data
+      }
+    }
   }
 
   #defineProperties(schema) {
@@ -472,15 +502,21 @@ export class ObjectTree {
       const def = Object.prototype.hasOwnProperty.call(subSchema ?? {}, 'default') ? subSchema.default
                 : (resolved && Object.prototype.hasOwnProperty.call(resolved, 'default')) ? resolved.default
                 : undefined
-      if (def !== undefined)
-        this.#data[key] = typeof def === 'object' && def !== null ? structuredClone(def) : def
+      if (def !== undefined) {
+        const cloned = typeof def === 'object' && def !== null ? structuredClone(def) : def
+        this.#data[key] = cloned && typeof cloned === 'object' && !Array.isArray(cloned)
+          ? new ObjectTree(cloned, subSchema, this.#loader)
+          : cloned
+      }
       Object.defineProperty(this, key, {
         get: () => this.#data[key],
         set: (v) => {
           validateType(v, subSchema, `${this.#path}.${key}`, this.#loader)
-          this.#data[key] = v
+          this.#data[key] = v && typeof v === 'object' && !Array.isArray(v)
+            ? new ObjectTree(v, subSchema, this.#loader)
+            : v
         },
-        enumerable: true, configurable: true,
+        enumerable: true, configurable: false,
       })
     }
   }
@@ -490,61 +526,72 @@ export class ObjectTree {
       && (this.#schema.type === 'object' || this.#schema.properties !== undefined)
   }
 
-  get value() {
-    return this.#isObjectNode() ? this.#data : this.#value
+  get $value() {
+    if (!this.#isObjectNode()) return this.#value
+    const out = {}
+    for (const [k, v] of Object.entries(this.#data))
+      out[k] = v instanceof ObjectTree ? v.$value : v
+    return out
   }
 
-  set value(v) {
+  set $value(v) {
     validateType(v, this.#schema, this.#path, this.#loader)
     if (this.#isObjectNode()) {
-      this.#data = v && typeof v === 'object' && !Array.isArray(v) ? { ...v } : {}
+      const raw = v && typeof v === 'object' && !Array.isArray(v) ? v : {}
+      const props = this.#schema.properties
+      for (const [k, val] of Object.entries(raw)) {
+        // already validated by validateType above — wrap without re-validating
+        this.#data[k] = props?.[k] && val && typeof val === 'object' && !Array.isArray(val)
+          ? new ObjectTree(val, props[k], this.#loader)
+          : val
+      }
     } else {
       this.#value = v
     }
   }
 
-  oneOf() {
+  $oneOf() {
     const schemas = this.#schema.oneOf
     if (!schemas) throw new Error('Schema has no oneOf')
-    const data = this.value
+    const data = this.$value
     const matches = schemas.filter(s => _softValidate(data, s, this.#loader))
     if (matches.length !== 1)
       throw new TypeError(`oneOf: expected exactly 1 match, got ${matches.length}`)
     return new ObjectTree(data, matches[0], this.#loader)
   }
 
-  anyOf() {
+  $anyOf() {
     const schemas = this.#schema.anyOf
     if (!schemas) throw new Error('Schema has no anyOf')
-    const data = this.value
+    const data = this.$value
     const matches = schemas.filter(s => _softValidate(data, s, this.#loader))
     if (matches.length === 0) throw new TypeError('anyOf: no schema matched')
     return matches.map(s => new ObjectTree(data, s, this.#loader))
   }
 
-  allOf() {
+  $allOf() {
     const schemas = this.#schema.allOf
     if (!schemas) throw new Error('Schema has no allOf')
-    const data = this.value
+    const data = this.$value
     return new ObjectTree(data, schemas.reduce(_deepMerge, {}), this.#loader)
   }
 
-  notOf() {
+  $notOf() {
     const notSchema = this.#schema.not
     if (!notSchema) return true
-    return !_softValidate(this.value, notSchema, this.#loader)
+    return !_softValidate(this.$value, notSchema, this.#loader)
   }
 
-  ifThen() {
+  $ifThen() {
     const { if: ifSchema, then: thenSchema, else: elseSchema } = this.#schema
     if (!ifSchema) return this
-    const data = this.value
+    const data = this.$value
     const branch = _softValidate(data, ifSchema, this.#loader) ? thenSchema : elseSchema
     return branch ? new ObjectTree(data, branch, this.#loader) : this
   }
 
-  project() {
-    const data = this.value
+  $project() {
+    const data = this.$value
     if (data === null || typeof data !== 'object' || Array.isArray(data))
       throw new TypeError('project: data must be an object')
     const props = this.#schema.properties
@@ -553,44 +600,49 @@ export class ObjectTree {
     for (const key of Object.keys(props))
       if (Object.prototype.hasOwnProperty.call(data, key))
         out[key] = data[key]
-    const projected = new ObjectTree(undefined, this.#schema, this.#loader)
-    projected.#data = out
-    return projected
+    return new ObjectTree(out, this.#schema, this.#loader)
   }
 
-  withDefaults() {
-    const data = this.value
+  $withDefaults() {
+    const data = this.$value
     if (data === null || typeof data !== 'object' || Array.isArray(data))
       throw new TypeError('withDefaults: data must be an object')
     return new ObjectTree(_applyDefaults({ ...data }, this.#schema, this.#loader), this.#schema, this.#loader)
   }
 
-  contains() {
-    const data = this.value
+  $contains() {
+    const data = this.$value
     if (!Array.isArray(data)) return null
     const cs = this.#schema.contains
     if (!cs) return null
     return data.some(item => _softValidate(item, cs, this.#loader))
   }
 
-  toDict() {
+  // Batch output — serialize to plain object for API/JSON/storage.
+  // Terminal operation: call once at the end, not for further manipulation.
+  $toDict() {
     if (this.#isObjectNode()) {
       const props = this.#schema.properties
-      if (!props) return { ...this.#data }
+      if (!props) {
+        const out = {}
+        for (const [k, v] of Object.entries(this.#data))
+          out[k] = v instanceof ObjectTree ? v.$toDict() : v
+        return out
+      }
       const out = {}
       for (const key of Object.keys(props)) {
         const v = this.#data?.[key]
-        if (v !== undefined) out[key] = v
+        if (v !== undefined) out[key] = v instanceof ObjectTree ? v.$toDict() : v
       }
       return out
     }
     return this.#value
   }
 
-  get schema() { return _schemaToDict(this.#schema) }
+  get $schema() { return _schemaToDict(this.#schema) }
 
-  getSchema(path = '') {
-    if (!path) return this.schema
+  $getSchema(path = '') {
+    if (!path) return this.$schema
     const parts = path.split('.').filter(Boolean)
     let node = this.#schema
     for (const part of parts) {
@@ -602,8 +654,8 @@ export class ObjectTree {
     return _schemaToDict(node)
   }
 
-  getExtensions(path = '') {
-    const node = path ? this.getSchema(path) : this.schema
+  $getExtensions(path = '') {
+    const node = path ? this.$getSchema(path) : this.$schema
     if (!node || typeof node !== 'object') return {}
     const out = {}
     for (const [k, v] of Object.entries(node)) {
@@ -612,7 +664,9 @@ export class ObjectTree {
     return out
   }
 
-  toJSON() { return JSON.stringify(this.toDict(), null, 2) }
+  // Batch output — serialize to JSON string. Terminal operation.
+  toJSON() { return this.$toDict() }
+  $toJSON() { return JSON.stringify(this.toJSON(), null, 2) }
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -638,12 +692,12 @@ function _schemaToDict(schema) {
 function _applyDefaults(data, schema, loader) {
   if (!schema || typeof schema !== 'object') return data
   const resolved = schema.$ref
-    ? loader.resolve(schema.$ref, schema.$id || null).node
+    ? loader.resolve(schema.$ref, loader.scopeOf(schema), loader.resourceOf(schema)).node
     : schema
   const props = resolved.properties
   if (!props || typeof props !== 'object') return data
   for (const [k, rawS] of Object.entries(props)) {
-    const s = rawS?.$ref ? loader.resolve(rawS.$ref, rawS.$id || null).node : rawS
+    const s = rawS?.$ref ? loader.resolve(rawS.$ref, loader.scopeOf(rawS), loader.resourceOf(rawS)).node : rawS
     if (Object.prototype.hasOwnProperty.call(data, k)) {
       if (data[k] && typeof data[k] === 'object' && !Array.isArray(data[k]))
         data[k] = _applyDefaults({ ...data[k] }, rawS, loader)
@@ -659,6 +713,9 @@ function _applyDefaults(data, schema, loader) {
 }
 
 // ─── validate ─────────────────────────────────────────────────────────────────
+// Gate check — validates data against schema, returns {valid, error?}.
+// Does NOT construct an ObjectTree. Use as a pass/fail checkpoint only.
+// For runtime object with property access, use new ObjectTree(data, schema).
 
 export function validate(data, schema, resolver) {
   try {
