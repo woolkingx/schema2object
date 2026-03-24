@@ -2,46 +2,212 @@
 
 JSON Schema defines the object class — structure + constraints + behavioral logic.
 
-Best practice: treat JSON Schema the same way you define a JS object class.
-
-## Core Semantics
-
-- Schema defines the class; data is the instance
-- Mutation validates — at any nesting depth (nested objects are ObjectTree instances)
-- Unknown fields may exist at runtime (native JS behavior)
-- `$toDict()` exports schema-defined fields only
-- Schema extensions live in `x-*` (e.g. `x-docs`, `x-tests`)
-- All API methods use `$` prefix — data properties don't. No naming collision.
-
-## API
+## Install
 
 ```javascript
-import { ObjectTree } from 'schema2object'
+import { ObjectTree, validate } from './schema2object.mjs'
+```
 
+## Quick Start
+
+```javascript
 const schema = {
   type: 'object',
   properties: {
-    email: { type: 'string', format: 'email', 'x-docs': 'User email' },
-    age:   { type: 'integer', minimum: 0 }
+    name: { type: 'string' },
+    age:  { type: 'integer', minimum: 0, default: 0 }
   },
-  required: ['email']
+  required: ['name']
 }
 
-const user = new ObjectTree({}, schema)
+const user = new ObjectTree({ name: 'Alice' }, schema)
+user.name          // 'Alice' — data property
+user.age           // 0 — default preserved
+user.age = 30      // validates: ok
+user.age = -1      // throws RangeError: $.age: must be >= 0
+user.age = 'old'   // throws TypeError: $.age: expected integer
+```
 
-user.email = 'alice@example.com'
-user.age = 30
-user.email               // 'alice@example.com' — data property (no prefix)
-user.$getSchema('age')   // { type: 'integer', minimum: 0 }
-user.$getExtensions('email') // { 'x-docs': 'User email' }
-user.$oneOf()            // XOR branch dispatch
-user.$ifThen()           // conditional branch
-user.$project()          // keep only schema-defined fields
-user.$withDefaults()     // apply schema defaults (object only)
+## Constructor
 
-user.$value              // full data as plain object
-user.$toDict()           // schema-defined fields only
+```javascript
+// Inline schema — no external $ref
+const tree = new ObjectTree(data, schema)
+
+// With resolver — for $ref resolution
+// resolver can be:
+//   string  → schema file path (dirname used as $ref base dir)
+//   object  → uri → schema map
+//   function → (uri) => schema
+const tree = new ObjectTree(data, schema, './schemas/user.json')
+const tree = new ObjectTree(data, schema, { 'http://example.com/addr.json': addrSchema })
+const tree = new ObjectTree(data, schema, (uri) => loadSchema(uri))
+```
+
+## Loading Schema from File
+
+Schema is always a plain object. Read and parse it yourself — the lib doesn't do I/O.
+
+```javascript
+import { readFileSync } from 'fs'
+
+const schema = JSON.parse(readFileSync('./schemas/user.json', 'utf8'))
+const user = new ObjectTree(data, schema)
+
+// If schema uses $ref, pass file path as resolver (dirname = $ref base dir)
+const user = new ObjectTree(data, schema, './schemas/user.json')
+```
+
+## $ Prefix Convention
+
+All API methods use `$` prefix. Data properties don't. Zero collision.
+
+```javascript
+// data properties — from schema.properties
+user.name               // read
+user.name = 'Bob'       // write (validates)
+
+// API methods — $-prefixed
+user.$value             // full data as plain object
+user.$schema            // resolved schema
+user.$toDict()          // schema-defined fields only (projection)
+user.$getSchema('age')  // sub-schema for a field
+user.$getExtensions()   // all x-* extensions
+```
+
+Why: if your schema defines a property called `value` or `schema`, it won't collide with the API.
+
+## Nested Objects
+
+Nested objects are automatically ObjectTree instances. Validation works at any depth.
+
+```javascript
+const schema = {
+  type: 'object',
+  properties: {
+    address: {
+      type: 'object',
+      properties: {
+        city: { type: 'string' },
+        zip:  { type: 'string', pattern: '^[0-9]{5}$' }
+      }
+    }
+  }
+}
+
+const user = new ObjectTree({ address: { city: 'NY', zip: '10001' } }, schema)
+user.address.city          // 'NY' — nested ObjectTree
+user.address.zip = 'bad'   // throws TypeError: pattern mismatch
+user.address = { city: 'LA', zip: '90001' }  // replaces entire nested object
+```
+
+## Defaults
+
+Defaults are preserved on construction and on `$value` set.
+
+```javascript
+const schema = {
+  type: 'object',
+  properties: {
+    role: { type: 'string', default: 'user' },
+    name: { type: 'string' }
+  }
+}
+
+const t = new ObjectTree({ name: 'Alice' }, schema)
+t.role               // 'user' — default preserved
+t.$value = { name: 'Bob' }
+t.role               // 'user' — still preserved
+```
+
+## $ref Resolution
+
+`$ref` resolves relative to the schema file path or URI map.
+
+```javascript
+// schema file: ./schemas/user.json
+// {
+//   "properties": {
+//     "address": { "$ref": "address.json" }
+//   }
+// }
+
+import { readFileSync } from 'fs'
+const schema = JSON.parse(readFileSync('./schemas/user.json', 'utf8'))
+const user = new ObjectTree(data, schema, './schemas/user.json')
+// address.$ref resolves to ./schemas/address.json
+```
+
+Using definitions (internal $ref):
+
+```javascript
+const schema = {
+  definitions: {
+    address: {
+      type: 'object',
+      properties: { city: { type: 'string' } }
+    }
+  },
+  type: 'object',
+  properties: {
+    billing:  { $ref: '#/definitions/address' },
+    shipping: { $ref: '#/definitions/address' }
+  }
+}
+
+const order = new ObjectTree({
+  billing:  { city: 'NY' },
+  shipping: { city: 'LA' }
+}, schema)
+```
+
+## Composition Methods
+
+Draft-07 logic keywords become callable methods:
+
+```javascript
+// oneOf — XOR: exactly one branch matches
+const resolved = tree.$oneOf()
+
+// anyOf — OR: all matching branches
+const branches = tree.$anyOf()  // returns array
+
+// allOf — AND: merge all sub-schemas
+const merged = tree.$allOf()
+
+// if/then/else — conditional
+const branch = tree.$ifThen()
+
+// not — negation
+const isValid = tree.$notOf()  // returns boolean
+
+// contains — array element match
+const hasMatch = tree.$contains()  // returns boolean
+
+// project — keep only schema-defined fields
+const projected = tree.$project()
+
+// withDefaults — fill missing defaults
+const filled = tree.$withDefaults()
+```
+
+## Standalone Validation
+
+Validate without constructing an ObjectTree:
+
+```javascript
+const result = validate(data, schema)
+// { valid: true }
+// { valid: false, error: '$.age: expected integer, got string' }
+```
+
+## Serialization
+
+```javascript
 JSON.stringify(user)     // works — toJSON() protocol
+user.$toDict()           // plain object, schema-defined fields only
+user.$toJSON()           // formatted JSON string
+user.$value              // plain object, all fields
 ```
 
 ## See Also

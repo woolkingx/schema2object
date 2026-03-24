@@ -79,3 +79,8 @@ docs/
 .pytest_cache/
 **/.pytest_cache/
 rust/target/
+
+.claude/
+**/.claude/
+.github/
+AGENTS.md

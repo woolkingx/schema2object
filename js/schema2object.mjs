@@ -2,6 +2,7 @@
  * schema2object — JavaScript
  * JSON Schema IS the object class.
  * Spec: docs/draft-07-spec.json
+ * @version 0.4.0
  */
 
 import { readFileSync } from 'fs'
@@ -453,7 +454,6 @@ export class ObjectTree {
   #schema
   #loader
   #value
-  #data
   #path
 
   constructor(data, schema, resolver) {
@@ -475,24 +475,23 @@ export class ObjectTree {
       this.#schema = schema
       this.#loader = loader
     }
-    if (this.#isObjectNode()) {
-      this.#data = {}
-      this.#defineProperties(this.#schema)
-    }
+    this.#value = {}
+    this.#defineProperties(this.#schema)
     if (data !== undefined) {
       validateType(data, this.#schema, this.#path, this.#loader)
-      if (this.#isObjectNode() && data && typeof data === 'object' && !Array.isArray(data)) {
+      if (data && typeof data === 'object' && !Array.isArray(data)) {
         const props = this.#schema.properties
         for (const [k, val] of Object.entries(data))
-          this.#data[k] = props?.[k] && val && typeof val === 'object' && !Array.isArray(val)
+          this.#value[k] = props?.[k] && val && typeof val === 'object' && !Array.isArray(val)
             ? new ObjectTree(val, props[k], this.#loader) : val
-      } else if (!this.#isObjectNode()) {
+      } else {
         this.#value = data
       }
     }
   }
 
   #defineProperties(schema) {
+    if (!schema || typeof schema !== 'object') return
     const { properties } = schema
     if (!properties) return
     for (const [key, subSchema] of Object.entries(properties)) {
@@ -504,15 +503,15 @@ export class ObjectTree {
                 : undefined
       if (def !== undefined) {
         const cloned = typeof def === 'object' && def !== null ? structuredClone(def) : def
-        this.#data[key] = cloned && typeof cloned === 'object' && !Array.isArray(cloned)
+        this.#value[key] = cloned && typeof cloned === 'object' && !Array.isArray(cloned)
           ? new ObjectTree(cloned, subSchema, this.#loader)
           : cloned
       }
       Object.defineProperty(this, key, {
-        get: () => this.#data[key],
+        get: () => this.#value[key],
         set: (v) => {
           validateType(v, subSchema, `${this.#path}.${key}`, this.#loader)
-          this.#data[key] = v && typeof v === 'object' && !Array.isArray(v)
+          this.#value[key] = v && typeof v === 'object' && !Array.isArray(v)
             ? new ObjectTree(v, subSchema, this.#loader)
             : v
         },
@@ -521,30 +520,23 @@ export class ObjectTree {
     }
   }
 
-  #isObjectNode() {
-    return typeof this.#schema === 'object' && this.#schema !== null
-      && (this.#schema.type === 'object' || this.#schema.properties !== undefined)
-  }
-
   get $value() {
-    if (!this.#isObjectNode()) return this.#value
+    if (typeof this.#value !== 'object' || this.#value === null || Array.isArray(this.#value))
+      return this.#value
     const out = {}
-    for (const [k, v] of Object.entries(this.#data))
+    for (const [k, v] of Object.entries(this.#value))
       out[k] = v instanceof ObjectTree ? v.$value : v
     return out
   }
 
   set $value(v) {
     validateType(v, this.#schema, this.#path, this.#loader)
-    if (this.#isObjectNode()) {
-      const raw = v && typeof v === 'object' && !Array.isArray(v) ? v : {}
+    if (v && typeof v === 'object' && !Array.isArray(v)) {
       const props = this.#schema.properties
-      for (const [k, val] of Object.entries(raw)) {
-        // already validated by validateType above — wrap without re-validating
-        this.#data[k] = props?.[k] && val && typeof val === 'object' && !Array.isArray(val)
+      for (const [k, val] of Object.entries(v))
+        this.#value[k] = props?.[k] && val && typeof val === 'object' && !Array.isArray(val)
           ? new ObjectTree(val, props[k], this.#loader)
           : val
-      }
     } else {
       this.#value = v
     }
@@ -621,22 +613,21 @@ export class ObjectTree {
   // Batch output — serialize to plain object for API/JSON/storage.
   // Terminal operation: call once at the end, not for further manipulation.
   $toDict() {
-    if (this.#isObjectNode()) {
-      const props = this.#schema.properties
-      if (!props) {
-        const out = {}
-        for (const [k, v] of Object.entries(this.#data))
-          out[k] = v instanceof ObjectTree ? v.$toDict() : v
-        return out
-      }
+    if (typeof this.#value !== 'object' || this.#value === null || Array.isArray(this.#value))
+      return this.#value
+    const props = this.#schema.properties
+    if (!props) {
       const out = {}
-      for (const key of Object.keys(props)) {
-        const v = this.#data?.[key]
-        if (v !== undefined) out[key] = v instanceof ObjectTree ? v.$toDict() : v
-      }
+      for (const [k, v] of Object.entries(this.#value))
+        out[k] = v instanceof ObjectTree ? v.$toDict() : v
       return out
     }
-    return this.#value
+    const out = {}
+    for (const key of Object.keys(props)) {
+      const v = this.#value?.[key]
+      if (v !== undefined) out[key] = v instanceof ObjectTree ? v.$toDict() : v
+    }
+    return out
   }
 
   get $schema() { return _schemaToDict(this.#schema) }

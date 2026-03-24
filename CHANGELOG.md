@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.4.0] - 2026-03-21
+
+### Breaking Changes (JS)
+- **Unified `#value` storage** — removed `#isObjectNode()` and dual `#value`/`#data` fields. Every schema node is an object; `type`/`properties` are just attributes, not node classification. Schemas without `type` or `properties` (e.g. pure `anyOf`/`oneOf`) now correctly build ObjectTree.
+- **Removed file path as schema parameter** — schema must be a plain object. Read and parse files yourself; the lib doesn't do I/O.
+
+### Fixed
+- **Nested wrapping for schemeless nodes** (JS) — schemas without `type: "object"` or `properties` now correctly wrap nested data as ObjectTree
+- **Primitive data storage** (JS) — `ObjectTree("hello", { type: "string" })` now correctly stores and returns the value
+
+### Changed
+- **`#defineProperties` guard** (JS) — handles `null`/boolean schemas without crashing
+- **README** — rewritten constructor docs, added "Loading Schema from File" section
+
 ## [0.3.0] - 2026-03-17
 
 ### Breaking Changes (JS only)
