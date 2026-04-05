@@ -2,6 +2,7 @@
 schema2object — Python
 JSON Schema IS the object class.
 Spec: docs/draft-07-spec.json
+Version: 0.4.0
 """
 
 import copy
@@ -563,22 +564,11 @@ class ObjectTree:
             object.__setattr__(self, '_ObjectTree__loader', loader)
 
         object.__setattr__(self, '_ObjectTree__props', {})
-        object.__setattr__(self, '_ObjectTree__value', None)
-        object.__setattr__(self, '_ObjectTree__data', {})
-
-        if self._is_object_node():
-            object.__setattr__(self, '_ObjectTree__data', {})
-            self._define_properties(self.__schema)
+        object.__setattr__(self, '_ObjectTree__value', {})
+        self._define_properties(self.__schema)
 
         if data is not _MISSING:
             self.value = data
-
-    def _is_object_node(self):
-        s = self.__schema
-        return (
-            isinstance(s, dict)
-            and (s.get('type') == 'object' or 'properties' in s)
-        )
 
     def _define_properties(self, schema):
         if not isinstance(schema, dict):
@@ -586,29 +576,9 @@ class ObjectTree:
         props = schema.get('properties')
         if not props:
             return
-        loader = self.__loader
-        for key, sub_schema in props.items():
-            # Resolve $ref to get default
-            resolved = sub_schema
-            if isinstance(sub_schema, dict) and '$ref' in sub_schema:
-                try:
-                    resolved, _ = loader.resolve(
-                        sub_schema['$ref'],
-                        loader.scope_of(sub_schema),
-                        loader.resource_of(sub_schema),
-                    )
-                except Exception:
-                    resolved = sub_schema
-
-            # Set default if present
-            if isinstance(sub_schema, dict) and 'default' in sub_schema:
-                def_ = sub_schema['default']
-                data = object.__getattribute__(self, '_ObjectTree__data')
-                data[key] = copy.deepcopy(def_) if isinstance(def_, (dict, list)) else def_
-            elif isinstance(resolved, dict) and 'default' in resolved:
-                def_ = resolved['default']
-                data = object.__getattribute__(self, '_ObjectTree__data')
-                data[key] = copy.deepcopy(def_) if isinstance(def_, (dict, list)) else def_
+        # Only register property descriptors — no default filling here
+        props_map = object.__getattribute__(self, '_ObjectTree__props')
+        props_map.update(props)
 
     def __getattr__(self, name):
         if name.startswith('_ObjectTree__') or name.startswith('__'):
@@ -616,7 +586,7 @@ class ObjectTree:
         # Check if it's a schema-defined property
         schema = object.__getattribute__(self, '_ObjectTree__schema')
         if isinstance(schema, dict) and 'properties' in schema and name in schema['properties']:
-            data = object.__getattribute__(self, '_ObjectTree__data')
+            data = object.__getattribute__(self, '_ObjectTree__value')
             return data.get(name)
         raise AttributeError(f"'{type(self).__name__}' has no attribute '{name}'")
 
@@ -630,16 +600,21 @@ class ObjectTree:
         if isinstance(schema, dict) and 'properties' in schema and name in schema['properties']:
             sub_schema = schema['properties'][name]
             validate_type(value, sub_schema, f'{path}.{name}', loader)
-            data = object.__getattribute__(self, '_ObjectTree__data')
-            data[name] = value
+            data = object.__getattribute__(self, '_ObjectTree__value')
+            data[name] = ObjectTree(value, sub_schema, loader) \
+                if isinstance(value, dict) and not isinstance(value, ObjectTree) else value
         else:
             object.__setattr__(self, name, value)
 
     @property
     def value(self):
-        if self._is_object_node():
-            return object.__getattribute__(self, '_ObjectTree__data')
-        return object.__getattribute__(self, '_ObjectTree__value')
+        raw = object.__getattribute__(self, '_ObjectTree__value')
+        if not isinstance(raw, dict):
+            return raw
+        out = {}
+        for k, v in raw.items():
+            out[k] = v.value if isinstance(v, ObjectTree) else v
+        return out
 
     @value.setter
     def value(self, v):
@@ -647,15 +622,37 @@ class ObjectTree:
         loader = object.__getattribute__(self, '_ObjectTree__loader')
         path = object.__getattribute__(self, '_ObjectTree__path')
         validate_type(v, schema, path, loader)
-        if self._is_object_node():
-            # Merge: start from defaults already in __data, overlay with incoming data
-            existing = object.__getattribute__(self, '_ObjectTree__data')
-            if isinstance(v, dict):
-                merged = dict(existing)
-                merged.update(v)
-                object.__setattr__(self, '_ObjectTree__data', merged)
-            else:
-                object.__setattr__(self, '_ObjectTree__data', dict(existing))
+        if isinstance(v, dict):
+            props = schema.get('properties') if isinstance(schema, dict) else None
+            merged = {}
+            for k, val in v.items():
+                sub_s = props.get(k) if props else None
+                merged[k] = ObjectTree(val, sub_s if sub_s else True, loader) \
+                    if isinstance(val, dict) and not isinstance(val, ObjectTree) else val
+            object.__setattr__(self, '_ObjectTree__value', merged)
+            # fill defaults for keys not provided by data
+            if props:
+                for key, sub_schema in props.items():
+                    if key in merged:
+                        continue
+                    resolved = sub_schema
+                    if isinstance(sub_schema, dict) and '$ref' in sub_schema:
+                        try:
+                            resolved, _ = loader.resolve(
+                                sub_schema['$ref'],
+                                loader.scope_of(sub_schema),
+                                loader.resource_of(sub_schema),
+                            )
+                        except Exception:
+                            resolved = sub_schema
+                    def_ = sub_schema.get('default', _MISSING) if isinstance(sub_schema, dict) else _MISSING
+                    if def_ is _MISSING and isinstance(resolved, dict):
+                        def_ = resolved.get('default', _MISSING)
+                    if def_ is not _MISSING:
+                        validate_type(def_, sub_schema, f'{path}.{key}.<default>', loader)
+                        cloned = copy.deepcopy(def_) if isinstance(def_, (dict, list)) else def_
+                        merged[key] = ObjectTree(cloned, sub_schema, loader) \
+                            if isinstance(cloned, dict) else cloned
         else:
             object.__setattr__(self, '_ObjectTree__value', v)
 
@@ -728,7 +725,7 @@ class ObjectTree:
             return ObjectTree(data, schema, loader)
         out = {k: data[k] for k in props if k in data}
         projected = ObjectTree(schema=schema, resolver=loader)
-        object.__setattr__(projected, '_ObjectTree__data', out)
+        object.__setattr__(projected, '_ObjectTree__value', out)
         return projected
 
     def with_defaults(self):
@@ -754,14 +751,14 @@ class ObjectTree:
     # Batch output — serialize to plain dict for API/JSON/storage.
     # Terminal operation: call once at the end, not for further manipulation.
     def to_dict(self):
-        if self._is_object_node():
-            schema = object.__getattribute__(self, '_ObjectTree__schema')
-            data = object.__getattribute__(self, '_ObjectTree__data')
-            props = schema.get('properties') if isinstance(schema, dict) else None
-            if not props:
-                return dict(data)
-            return {k: data[k] for k in props if k in data}
-        return object.__getattribute__(self, '_ObjectTree__value')
+        data = object.__getattribute__(self, '_ObjectTree__value')
+        if not isinstance(data, dict):
+            return data
+        schema = object.__getattribute__(self, '_ObjectTree__schema')
+        props = schema.get('properties') if isinstance(schema, dict) else None
+        if not props:
+            return dict(data)
+        return {k: data[k] for k in props if k in data}
 
     @property
     def schema(self):

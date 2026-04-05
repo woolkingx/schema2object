@@ -36,12 +36,12 @@ const tree = new ObjectTree(data, schema)
 
 // With resolver — for $ref resolution
 // resolver can be:
-//   string  → schema file path (dirname used as $ref base dir)
-//   object  → uri → schema map
-//   function → (uri) => schema
-const tree = new ObjectTree(data, schema, './schemas/user.json')
+//   string   → base directory for relative $ref file paths (no HTTP support)
+//   object   → { uri: schema } map, looked up by resolved URI
+//   function → (uri) => schema, called when $ref can't resolve internally
+const tree = new ObjectTree(data, schema, './schemas/')
 const tree = new ObjectTree(data, schema, { 'http://example.com/addr.json': addrSchema })
-const tree = new ObjectTree(data, schema, (uri) => loadSchema(uri))
+const tree = new ObjectTree(data, schema, (uri) => fetchSchema(uri))
 ```
 
 ## Loading Schema from File
@@ -54,8 +54,8 @@ import { readFileSync } from 'fs'
 const schema = JSON.parse(readFileSync('./schemas/user.json', 'utf8'))
 const user = new ObjectTree(data, schema)
 
-// If schema uses $ref, pass file path as resolver (dirname = $ref base dir)
-const user = new ObjectTree(data, schema, './schemas/user.json')
+// If schema uses relative $ref, pass base dir as resolver
+const user = new ObjectTree(data, schema, './schemas/')
 ```
 
 ## $ Prefix Convention
@@ -101,9 +101,9 @@ user.address.zip = 'bad'   // throws TypeError: pattern mismatch
 user.address = { city: 'LA', zip: '90001' }  // replaces entire nested object
 ```
 
-## Defaults
+## Defaults (Lazy)
 
-Defaults are preserved on construction and on `$value` set.
+Schema `default` is the initial value. Missing keys read their default transparently — no explicit call needed.
 
 ```javascript
 const schema = {
@@ -115,27 +115,33 @@ const schema = {
 }
 
 const t = new ObjectTree({ name: 'Alice' }, schema)
-t.role               // 'user' — default preserved
+t.role               // 'user' — reads schema default (not in raw data)
+'role' in t          // true — default-only keys are visible
+Object.keys(t)       // ['name', 'role'] — includes default-only keys
+
 t.$value = { name: 'Bob' }
-t.role               // 'user' — still preserved
+t.role               // 'user' — default still available
+
+// Materialize defaults into raw data (for schema-unaware consumers)
+t.$withDefaults()
+t.$value             // { name: 'Bob', role: 'user' } — defaults now in raw data
 ```
 
 ## $ref Resolution
 
-`$ref` resolves relative to the schema file path or URI map.
+`$ref` resolves through the resolver. Filesystem resolver handles relative paths only; HTTP URIs require a function or object-map resolver.
 
 ```javascript
-// schema file: ./schemas/user.json
-// {
-//   "properties": {
-//     "address": { "$ref": "address.json" }
-//   }
-// }
-
-import { readFileSync } from 'fs'
+// Filesystem: relative $ref resolved against base dir
 const schema = JSON.parse(readFileSync('./schemas/user.json', 'utf8'))
-const user = new ObjectTree(data, schema, './schemas/user.json')
-// address.$ref resolves to ./schemas/address.json
+const user = new ObjectTree(data, schema, './schemas/')
+// address.$ref: "address.json" → reads ./schemas/address.json
+
+// Function resolver: handle any URI scheme
+const user = new ObjectTree(data, schema, (uri) => {
+  if (uri.startsWith('http://')) return fetch(uri).then(r => r.json())
+  return JSON.parse(readFileSync(uri, 'utf8'))
+})
 ```
 
 Using definitions (internal $ref):

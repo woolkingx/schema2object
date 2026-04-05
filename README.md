@@ -25,6 +25,7 @@ These are internal mechanisms of the class, not external validation steps:
 - **Assignment enforces the field contract.** Writing to a field checks the field's schema before storage. The class rejects what does not fit.
 - **`to_dict()` projects the schema.** Serialization returns schema-defined fields only. Extra runtime fields exist but are outside the class definition.
 - **Unknown fields are permitted at runtime.** The instance can carry state beyond the schema, as any object can. It just does not appear in `to_dict()`.
+- **Schema defaults are the initial value.** A field missing from raw data reads its schema `default` transparently — `tree.port` returns `8080` without any explicit `$withDefaults()` call. `Object.keys(tree)` and `in` include default-only fields. `$withDefaults()` materializes defaults into raw data for serialization to schema-unaware systems.
 
 ## Draft-07 Logic → Methods
 
@@ -39,7 +40,7 @@ Draft-07 combinators are the class's behavioral logic, not query operations on e
 | `if/then/else` | `$ifThen()` | `if_then()` | CASE WHEN — re-bind to the matching branch |
 | `properties` | `$project()` | `project()` | SELECT — keep only schema-defined fields |
 | `contains` | `$contains()` | `contains()` | EXISTS — true if any array element matches |
-| `default` | `$withDefaults()` | `with_defaults()` | fill missing fields from schema defaults |
+| `default` | `$withDefaults()` | `with_defaults()` | materialize schema defaults into raw data |
 
 > **JS naming convention**: All ObjectTree API methods use `$` prefix (`$value`, `$schema`, `$toDict()`, etc.). Data properties have no prefix (`tree.name`, `tree.email`). This avoids collision when schema property names match API method names.
 

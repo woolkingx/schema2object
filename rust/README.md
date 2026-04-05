@@ -1,56 +1,73 @@
-# schema2object (Rust)
+# schema2object — Rust
 
-JSON Schema Draft-07 as object definition in Rust.
+JSON Schema IS the object class. Zero dependencies.
 
-## Core Idea
+## Two-Layer Architecture
 
-Schema defines the class; data is the instance. Access returns schema-aware objects,
-mutation validates, and Draft-07 logic maps to methods.
+### Compile-time: Proc-Macro
 
-## Install
-
-```bash
-cargo add schema2object
-```
-
-## Quick Example
+Schema → typed struct. Construction IS validation.
 
 ```rust
-use schema2object::ObjectTree;
-use serde_json::json;
+use schema2object::schema;
 
-let schema = json!({
-  "type": "object",
-  "properties": {
-    "name": {"type": "string"},
-    "age":  {"type": "integer", "minimum": 0, "x-docs": "Age in years"}
-  }
-});
+#[schema("user.schema.json")]
+struct User;
 
-let mut user = ObjectTree::new(json!({"name": "Alice"}), schema);
-user.set("age", json!(30)).unwrap();
+let user = User::new(
+    "Alice".to_string(),    // name (required)
+    Some(30),               // age (optional, default 0)
+    "alice@example.com".to_string(),
+    None,                   // address (optional)
+).unwrap();
 
-let name = user.get("name").unwrap();
-assert_eq!(name.to_value(), json!("Alice"));
-
-// Explicit schema access
-let age_schema = user.get_schema(Some("age")).unwrap();
-assert_eq!(age_schema["minimum"], json!(0));
-let x = user.get_extensions(Some("age"));
-assert_eq!(x.get("x-docs").unwrap(), "Age in years");
+user.name   // String — compile-time typed
+user.age    // i64 — default applied
+user.email  // String
 ```
 
-## API Notes
+What the macro generates:
+- Typed struct with fields from `schema.properties`
+- Nested sub-structs for object properties
+- `new()` — constructor with constraint validation (minimum/maximum/enum/const/length)
+- `validate()` — same as new, returns `Result`
+- `to_json()` — JSON string output
+- `to_dict()` — `HashMap<String, String>`
+- `schema()` — raw schema JSON string
+- `get_extensions()` — all `x-*` keys
 
-- `get/get_index/path` return `ObjectTree`
-- `set/set_index` validate on write
-- `to_dict()` returns schema-defined fields only
-- `to_value()` returns full data (including unknown fields)
-- `get_schema(path)` reads schema (dot path supported)
-- `get_extensions(path)` reads `x-*` extensions
+### Runtime: ObjectTree
 
-## Tests
+Dynamic access when schema isn't known at compile time.
+
+```rust
+use schema2object::{JsonNode, ObjectTree};
+
+let schema = JsonNode::from_file("user.schema.json").unwrap();
+let data = JsonNode::parse(r#"{"name": "Alice", "age": 30}"#).unwrap();
+let user = ObjectTree::new(data, schema).unwrap();
+
+user["name"].as_str()  // Some("Alice")
+user["age"].as_i64()   // Some(30)
+```
+
+Runtime methods: `one_of()`, `any_of()`, `all_of()`, `if_then()`, `not_of()`, `contains()`, `project()`, `with_defaults()`, `get_schema()`, `get_extensions()`, `to_value()`.
+
+## Test
 
 ```bash
-cargo test
+cargo test          # 17 tests
+cargo run --example macro_usage
+cargo run --example usage
 ```
+
+## Files
+
+```
+src/json.rs                    # JSON parser (~320 lines)
+src/tree.rs                    # ObjectTree runtime (~430 lines)
+src/lib.rs                     # re-exports
+schema2object-macro/src/lib.rs # proc-macro (~640 lines)
+```
+
+Total: ~1400 lines, zero external dependencies.

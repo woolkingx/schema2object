@@ -84,3 +84,9 @@ rust/target/
 **/.claude/
 .github/
 AGENTS.md
+rust-legacy/
+scripts/
+js/schema2object_legacy.mjs
+js/schema2object_v2.mjs
+js/tests/bench_*.mjs
+js/schema2object.schema.json
