@@ -1,5 +1,38 @@
 # Changelog
 
+## [0.5.2] - 2026-04-15
+
+### Changed (JS)
+- **Observer Schema Context** — `ObjectTree._observer` hook signature extended with 5th parameter: `fn(op, path, key, val, schema)`. The `schema` parameter provides the schema node for the accessed property, enabling:
+  - Filter properties by `x-observable` or other extensions
+  - Format-aware serialization based on `schema.format`
+  - Type-aware logging with `schema.type` and `schema.description`
+  - Reactive bindings with full schema metadata in event payload
+- **Backward compatible** — existing observer hooks with 4-parameter signature continue to work (5th parameter ignored if unused)
+
+### Added (JS)
+- **Observer examples** — `examples/observer_schema_context.mjs` demonstrates 4 use cases: filter by extension, format-aware serialization, type-aware logging, schema-less property handling
+
+### Tests (JS)
+- All existing tests pass: 922/922 Draft-07 + 19/19 validate tests
+
+## [0.5.1] - 2026-04-15
+
+### Added (JS)
+- **Dot Key Support** — nested property paths via dot notation syntax. `obj["a.b.c"] = value` automatically creates intermediate objects and validates against nested schema. Simplifies deep property updates without manual object traversal.
+  - Auto-creates intermediate objects when undefined/null
+  - Full schema validation on final property
+  - Works with existing observer hooks
+- **`ObjectTree._observer`** — static hook point for property access observation. Set to `fn(op, path, key, val)` to observe all get/set across every ObjectTree instance. `null` disables (zero cost). Structural equivalent of Objective-C KVO — every schema-driven object is natively observable without wrapper or Proxy layer.
+  - `get` emits after value resolution (primitive, object wrap, array cursor)
+  - `set` emits after validation and write
+  - Cached object/array re-access does not re-emit (cache hit returns before hook)
+
+### Tests (JS)
+- 5 new dot key support tests in `test_dotkey.mjs`: basic nested set, multiple paths, overwrite, type validation, auto-create intermediate
+- 6 observer tests in `validate.mjs`: get primitive, get object, get array, set, null-disable, cached-no-re-emit
+- Total: 922/922 Draft-07 (100%)
+
 ## [0.5.0] - 2026-03-30
 
 ### Changed (JS)

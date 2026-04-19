@@ -2,6 +2,8 @@
 
 JSON Schema defines the object class — structure + constraints + behavioral logic.
 
+Current mainline: `v0.6.0` pointer + proxy + lazy.
+
 ## Install
 
 ```javascript
@@ -27,6 +29,10 @@ user.age = 30      // validates: ok
 user.age = -1      // throws RangeError: $.age: must be >= 0
 user.age = 'old'   // throws TypeError: $.age: expected integer
 ```
+
+`tree.key` is a live proxy access path: nested objects and arrays stay wrapped.
+`{ ...tree }` is a shallow enumeration path: it materializes a plain object snapshot with raw values.
+That difference is intentional.
 
 ## Constructor
 
@@ -197,6 +203,39 @@ const projected = tree.$project()
 const filled = tree.$withDefaults()
 ```
 
+## Observer Hook (v0.5.2+)
+
+Global hook for reactive bindings, logging, or instrumentation. Receives schema metadata as 5th parameter.
+
+```javascript
+// Signature: fn(op, path, key, val, schema)
+// op = 'get' | 'set'
+// path = JSON path string (e.g., '$.user.address')
+// key = property name
+// val = value being read/written
+// schema = schema node for the property (undefined if no constraint)
+
+ObjectTree._observer = (op, path, key, val, schema) => {
+  const type = schema?.type || 'any'
+  const desc = schema?.description || ''
+  console.log(`[${op}] ${path}.${key} (${type}): ${desc}`)
+}
+
+const user = new ObjectTree({ name: 'Alice', age: 30 }, schema)
+user.name  // logs: [get] $.name (string): ...
+user.age = 31  // logs: [set] $.age (integer): ...
+
+ObjectTree._observer = null  // disable (zero cost)
+```
+
+Use cases:
+- **Filter by extension**: Skip properties with `x-observable: false`
+- **Format-aware serialization**: Use `schema.format` to serialize dates/emails
+- **Type-aware logging**: Log with type/description metadata
+- **Reactive bindings**: Build UI bindings, change tracking, etc.
+
+See [examples/observer_schema_context.mjs](examples/observer_schema_context.mjs) for complete examples.
+
 ## Standalone Validation
 
 Validate without constructing an ObjectTree:
@@ -218,6 +257,7 @@ user.$value              // plain object, all fields
 
 ## See Also
 
+- [Usage Guide](../docs/schema2object-usage.md) — Loader/resolve patterns, dot key support, observer hooks, common mistakes
 - [Python implementation](../python/)
 - [Rust implementation](../rust/)
 - [schema2object root](../)

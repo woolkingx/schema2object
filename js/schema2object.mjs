@@ -1,6 +1,14 @@
 /**
- * schema2object v0.5.0 — ctx struct + fn pipeline + Proxy cursor
- * Internal: C-style struct (ctx) + pure fns. External: object API unchanged.
+ * schema2object v0.6.0 — pointer + proxy + lazy baseline, forked from v0.5.9
+ * Internal: fixed slots + direct memory ops. External: object API unchanged.
+ * New: observer hook receives schema node as 5th param: fn(op, path, key, val, schema)
+ *
+ * 0.6.0 target areas:
+ * - keep Proxy-lazy access as the runtime core
+ * - treat cache/index/default/schema lookup as direct memory ops
+ * - avoid extra abstraction layers in hot paths
+ * - keep writes staged and validation local
+ * - prefer fixed structure over derived helper layers
  */
 
 import { readFileSync } from 'fs'
@@ -82,6 +90,131 @@ function _jsonPointer(root, pointer, percentDecode = false) {
   }
   if (node === undefined) throw new TypeError(`$ref not found: ${pointer}`)
   return node
+}
+
+// 0.5.8 note: this branch keeps the lazy proxy core and trims trap dispatch.
+// The comments below mark the first places to optimize or harden.
+
+const _DEFAULT_CACHE = new WeakMap()
+const _RESOLVED_CACHE = new WeakMap()
+const _LOADER_CACHE = new WeakMap()
+const _DEFAULT_VALUE_CACHE = new WeakMap()
+const _NO_DEFAULT = Symbol('no-default')
+
+function _weakCache(store, outer) {
+  let cache = store.get(outer)
+  if (!cache) {
+    cache = new WeakMap()
+    store.set(outer, cache)
+  }
+  return cache
+}
+
+function _isSafeCacheLoader(loader) {
+  return !!loader && loader.resolver == null
+}
+
+function _loaderCache(schema) {
+  let cache = _LOADER_CACHE.get(schema)
+  if (!cache) {
+    cache = new Map()
+    _LOADER_CACHE.set(schema, cache)
+  }
+  return cache
+}
+
+function _defaultLoader(schema, documentBase = null) {
+  const cache = _loaderCache(schema)
+  const key = documentBase || ''
+  if (cache.has(key)) return cache.get(key)
+  const loader = new Loader(schema, null, documentBase || undefined)
+  cache.set(key, loader)
+  return loader
+}
+
+function _resolveSchemaNode(schema, loader) {
+  if (!schema || typeof schema !== 'object') return schema
+  if (!_isSafeCacheLoader(loader)) return schema
+  const loaderCache = _weakCache(_RESOLVED_CACHE, loader)
+  if (loaderCache.has(schema)) return loaderCache.get(schema)
+
+  let node = schema
+  let currentLoader = loader
+  const seen = new Set()
+  while (node && typeof node === 'object' && node.$ref) {
+    const ref = node.$ref
+    if (seen.has(ref)) throw new TypeError(`circular $ref: ${ref}`)
+    seen.add(ref)
+    const { node: nextNode, loader: nextLoader } = currentLoader.resolve(
+      ref, currentLoader.scopeOf(node), currentLoader.resourceOf(node))
+    node = nextNode
+    currentLoader = nextLoader
+  }
+  loaderCache.set(schema, node)
+  return node
+}
+
+function _propertySchema(schema, loader, key) {
+  if (!schema || typeof schema !== 'object') return undefined
+  const props = schema.properties
+  if (!props || !Object.prototype.hasOwnProperty.call(props, key)) return undefined
+  const subSchema = props[key]
+  if (!subSchema || typeof subSchema !== 'object' || !subSchema.$ref) return subSchema
+  if (!_isSafeCacheLoader(loader)) return subSchema
+
+  const loaderCache = _weakCache(_DEFAULT_CACHE, loader)
+  let schemaCache = loaderCache.get(schema)
+  if (!schemaCache) {
+    schemaCache = new Map()
+    loaderCache.set(schema, schemaCache)
+  }
+  if (schemaCache.has(key)) return schemaCache.get(key)
+
+  const resolved = _resolveSchemaNode(subSchema, loader)
+  schemaCache.set(key, resolved)
+  return resolved
+}
+
+function _snapshotValue(raw, schema, loader) {
+  if (raw === null || typeof raw !== 'object') return raw
+  if (!schema || schema === true || typeof schema !== 'object') {
+    if (Array.isArray(raw)) return raw.map(item => _snapshotValue(item, null, loader))
+    const out = Object.create(null)
+    for (const [key, val] of Object.entries(raw)) {
+      out[key] = _snapshotValue(val, null, loader)
+    }
+    return out
+  }
+
+  if (Array.isArray(raw)) {
+    const itemSchema = schema?.items && typeof schema.items === 'object' && !schema.items.$ref ? schema.items : null
+    return raw.map(item => _snapshotValue(item, itemSchema, loader))
+  }
+
+  const out = Object.create(null)
+  const props = schema?.properties
+  const keys = new Set(Object.keys(raw))
+  if (props) {
+    for (const key of Object.keys(props)) {
+      if (Object.prototype.hasOwnProperty.call(raw, key)) continue
+      const subSchema = props[key]
+      if (subSchema && typeof subSchema === 'object' && !subSchema.$ref &&
+          Object.prototype.hasOwnProperty.call(subSchema, 'default')) keys.add(key)
+    }
+  }
+
+  for (const key of keys) {
+    const childSchema = props?.[key] && typeof props[key] === 'object' && !props[key].$ref
+      ? props[key]
+      : true
+    const val = Object.prototype.hasOwnProperty.call(raw, key)
+      ? raw[key]
+      : (childSchema !== true && Object.prototype.hasOwnProperty.call(childSchema ?? {}, 'default')
+        ? childSchema.default
+        : undefined)
+    out[key] = _snapshotValue(val, childSchema, loader)
+  }
+  return out
 }
 
 // ─── Loader (identical to v1) ─────────────────────────────────────────────────
@@ -404,13 +537,30 @@ const _PATH   = Symbol('path')
 const _CACHE  = Symbol('cache')
 
 // Keys that bypass Proxy and go straight to the ObjectTree instance
-const _PASS_THROUGH = new Set([
-  'constructor', 'then', '__proto__', 'toJSON',
-  '$value', '$schema', '$oneOf', '$anyOf', '$allOf', '$notOf', '$ifThen',
-  '$project', '$withDefaults', '$contains', '$toDict', '$toJSON',
-  '$getSchema', '$getExtensions',
-  _RAW, _SCHEMA, _LOADER, _PATH, _CACHE,
-])
+function _isPassThroughGetKey(key) {
+  if (typeof key !== 'string') return false
+  const c0 = key.charCodeAt(0)
+  if (c0 === 36) {
+    return key === '$value' || key === '$schema' || key === '$oneOf' || key === '$anyOf' ||
+           key === '$allOf' || key === '$notOf' || key === '$ifThen' || key === '$project' ||
+           key === '$withDefaults' || key === '$contains' || key === '$toDict' ||
+           key === '$toJSON' || key === '$getSchema' || key === '$getExtensions'
+  }
+  if (c0 === 95) return key === '__proto__'
+  if (c0 === 99) return key === 'constructor'
+  if (c0 === 116) return key === 'then' || key === 'toJSON'
+  return false
+}
+
+function _isPassThroughSetKey(key) {
+  if (typeof key !== 'string') return false
+  const c0 = key.charCodeAt(0)
+  if (c0 === 36) return true
+  if (c0 === 95) return key === '__proto__'
+  if (c0 === 99) return key === 'constructor'
+  if (c0 === 116) return key === 'then' || key === 'toJSON'
+  return false
+}
 
 // Lazy array cursor — Proxy over raw array, per-index ObjectTree cache
 function _makeArrayCursor(target, itemSchema, loader, basePath) {
@@ -459,107 +609,254 @@ function _makeArrayCursor(target, itemSchema, loader, basePath) {
 
 // Resolve a schema default value for a given key (returns undefined if none)
 function _schemaDefault(schema, loader, key) {
-  const subSchema = schema?.properties?.[key]
+  // 0.5.7 target: cache resolved defaults by (schema,key) and resolved $ref nodes.
+  if (_isSafeCacheLoader(loader)) {
+    const loaderCache = _weakCache(_DEFAULT_VALUE_CACHE, loader)
+    let schemaCache = loaderCache.get(schema)
+    if (!schemaCache) {
+      schemaCache = new Map()
+      loaderCache.set(schema, schemaCache)
+    } else if (schemaCache.has(key)) {
+      const cached = schemaCache.get(key)
+      return cached === _NO_DEFAULT ? undefined : cached
+    }
+    const subSchema = _propertySchema(schema, loader, key)
+    if (!subSchema) {
+      schemaCache.set(key, _NO_DEFAULT)
+      return undefined
+    }
+    if (Object.prototype.hasOwnProperty.call(subSchema ?? {}, 'default')) {
+      schemaCache.set(key, subSchema.default)
+      return subSchema.default
+    }
+    const resolved = _resolveSchemaNode(subSchema, loader)
+    if (resolved && Object.prototype.hasOwnProperty.call(resolved, 'default')) {
+      schemaCache.set(key, resolved.default)
+      return resolved.default
+    }
+    schemaCache.set(key, _NO_DEFAULT)
+    return undefined
+  }
+  const subSchema = _propertySchema(schema, loader, key)
   if (!subSchema) return undefined
-  const resolved = subSchema?.$ref
-    ? loader.resolve(subSchema.$ref, loader.scopeOf(subSchema), loader.resourceOf(subSchema)).node
-    : subSchema
   if (Object.prototype.hasOwnProperty.call(subSchema ?? {}, 'default')) return subSchema.default
+  const resolved = _resolveSchemaNode(subSchema, loader)
   if (resolved && Object.prototype.hasOwnProperty.call(resolved, 'default')) return resolved.default
   return undefined
 }
 
+function _treeGet(target, key) {
+  const raw = target[_RAW]
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return undefined
+
+  const schema = target[_SCHEMA]
+  const loader = target[_LOADER]
+  const path   = target[_PATH]
+  const cache  = target[_CACHE]
+
+  let val
+  if (Object.prototype.hasOwnProperty.call(raw, key)) {
+    val = raw[key]
+  } else {
+    const def = _schemaDefault(schema, loader, key)
+    if (def === undefined) return undefined
+    val = typeof def === 'object' && def !== null ? structuredClone(def) : def
+  }
+
+  if (val !== null && typeof val === 'object' && !Array.isArray(val)) {
+    const cached = cache.get(key)
+    if (cached !== undefined) return cached
+    const childSchema = _propertySchema(schema, loader, key) ?? schema?.properties?.[key] ?? true
+    const child = new ObjectTree(val, childSchema, loader, `${path}.${key}`)
+    cache.set(key, child)
+    if (ObjectTree._observer) ObjectTree._observer('get', path, key, child, childSchema)
+    return child
+  }
+
+  if (Array.isArray(val)) {
+    const cached = cache.get(key)
+    if (cached !== undefined) return cached
+    const propSchema = _propertySchema(schema, loader, key) ?? schema?.properties?.[key]
+    const itemSchema = propSchema?.items
+    const proxy = itemSchema
+      ? _makeArrayCursor(val, itemSchema, loader, `${path}.${key}`)
+      : val
+    cache.set(key, proxy)
+    if (ObjectTree._observer) ObjectTree._observer('get', path, key, proxy, propSchema)
+    return proxy
+  }
+
+  if (ObjectTree._observer) ObjectTree._observer('get', path, key, val, _propertySchema(schema, loader, key) ?? schema?.properties?.[key])
+  return val
+}
+
+function _treeSet(target, key, value) {
+  if (typeof key === 'string' && key.includes('.')) {
+    const parts = key.split('.')
+    const loader = target[_LOADER]
+    let raw = target[_RAW]
+    let schema = target[_SCHEMA]
+    if (raw === null || typeof raw !== 'object' || Array.isArray(raw))
+      throw new TypeError(`${target[_PATH]}: dot-key write requires object root`)
+
+    for (let i = 0; i < parts.length - 1; i++) {
+      const part = parts[i]
+      let next = raw[part]
+      if (next === undefined || next === null || typeof next !== 'object' || Array.isArray(next)) {
+        next = Object.create(null)
+        raw[part] = next
+      }
+      schema = _propertySchema(schema, loader, part) ?? schema?.properties?.[part] ?? true
+      raw = next
+    }
+    const leaf = parts.at(-1)
+    const leafSchema = _propertySchema(schema, loader, leaf) ?? schema?.properties?.[leaf] ?? true
+    validateType(value, leafSchema, `${target[_PATH]}.${key}`, loader)
+    raw[leaf] = value
+    target[_CACHE].clear()
+    return true
+  }
+
+  const schema = target[_SCHEMA]
+  const loader = target[_LOADER]
+  const path   = target[_PATH]
+  const subSchema = schema?.properties?.[key] ?? true
+  validateType(value, subSchema, `${path}.${key}`, loader)
+  target[_RAW][key] = value
+  target[_CACHE].delete(key)
+  if (ObjectTree._observer) ObjectTree._observer('set', path, key, value, subSchema)
+  return true
+}
+
+function _treeHas(target, key) {
+  const raw = target[_RAW]
+  if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+    if (Object.prototype.hasOwnProperty.call(raw, key)) return true
+    return _schemaDefault(target[_SCHEMA], target[_LOADER], key) !== undefined
+  }
+  return key in target
+}
+
+function _treeOwnKeys(target) {
+  const raw = target[_RAW]
+  if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+    const rawKeys = Object.keys(raw)
+    const schemaProps = target[_SCHEMA]?.properties
+    if (!schemaProps || typeof schemaProps !== 'object') return rawKeys
+    const extraKeys = Object.keys(schemaProps).filter(k =>
+      !Object.prototype.hasOwnProperty.call(raw, k) &&
+      _schemaDefault(target[_SCHEMA], target[_LOADER], k) !== undefined
+    )
+    return extraKeys.length ? rawKeys.concat(extraKeys) : rawKeys
+  }
+  return Reflect.ownKeys(target)
+}
+
+function _treeDescriptor(target, key) {
+  const raw = target[_RAW]
+  if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+    const inRaw = Object.prototype.hasOwnProperty.call(raw, key)
+    if (inRaw) {
+      const value = raw[key]
+      return { value, writable: true, enumerable: true, configurable: true }
+    }
+    const def = _schemaDefault(target[_SCHEMA], target[_LOADER], key)
+    if (def !== undefined) return { value: def, writable: true, enumerable: true, configurable: true }
+  }
+  return Reflect.getOwnPropertyDescriptor(target, key)
+}
+
+function _treeSnapshot(target) {
+  return _snapshotValue(target[_RAW], target[_SCHEMA], target[_LOADER])
+}
+
+function _treeSchemaDict(target) {
+  return _schemaToDict(target[_SCHEMA])
+}
+
+function _treeProject(target) {
+  const raw = target[_RAW]
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw))
+    throw new TypeError('project: data must be an object')
+  const props = target[_SCHEMA]?.properties
+  if (!props) return new ObjectTree(raw, target[_SCHEMA], target[_LOADER])
+  const out = Object.create(null)
+  for (const key of Object.keys(props))
+    if (Object.prototype.hasOwnProperty.call(raw, key)) out[key] = raw[key]
+  return new ObjectTree(out, target[_SCHEMA], target[_LOADER])
+}
+
+function _treeWithDefaults(target) {
+  const raw = target[_RAW]
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw))
+    throw new TypeError('withDefaults: data must be an object')
+  return new ObjectTree(_applyDefaults({ ...raw }, target[_SCHEMA], target[_LOADER]),
+                        target[_SCHEMA], target[_LOADER])
+}
+
+function _treeToDict(target) {
+  const raw = target[_RAW]
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return raw
+  const props = target[_SCHEMA]?.properties
+  const keys = props ? Object.keys(props).filter(k => Object.prototype.hasOwnProperty.call(raw, k)) : Object.keys(raw)
+  const out = Object.create(null)
+  for (const k of keys) out[k] = raw[k]
+  return out
+}
+
+function _treeGetSchema(target, path = '') {
+  if (!path) return _treeSchemaDict(target)
+  const parts = path.split('.').filter(Boolean)
+  let node = target[_SCHEMA]
+  for (const part of parts) {
+    if (!node || typeof node !== 'object') return undefined
+    const props = node.properties
+    if (!props || !(part in props)) return undefined
+    node = props[part]
+  }
+  return _schemaToDict(node)
+}
+
+function _treeGetExtensions(target, path = '') {
+  const node = path ? _treeGetSchema(target, path) : _treeSchemaDict(target)
+  if (!node || typeof node !== 'object') return {}
+  const out = {}
+  for (const [k, v] of Object.entries(node)) if (k.startsWith('x-')) out[k] = v
+  return out
+}
+
 const _HANDLER = {
   get(target, key, receiver) {
-    if (typeof key === 'symbol' || _PASS_THROUGH.has(key))
+    if (typeof key === 'symbol' || _isPassThroughGetKey(key))
       return Reflect.get(target, key, receiver)
 
     const raw = target[_RAW]
     if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return undefined
 
-    const schema = target[_SCHEMA]
-    const loader = target[_LOADER]
-    const path   = target[_PATH]
-    const cache  = target[_CACHE]
-
-    // Resolve value: raw key or schema default
-    let val
+    const cache = target[_CACHE]
     if (Object.prototype.hasOwnProperty.call(raw, key)) {
-      val = raw[key]
-    } else {
-      const def = _schemaDefault(schema, loader, key)
-      if (def === undefined) return undefined
-      val = typeof def === 'object' && def !== null ? structuredClone(def) : def
+      const cached = cache.get(key)
+      if (cached !== undefined) return cached
     }
-
-    // Wrap plain objects as ObjectTree (cached)
-    if (val !== null && typeof val === 'object' && !Array.isArray(val)) {
-      if (cache.has(key)) return cache.get(key)
-      const child = new ObjectTree(val, schema?.properties?.[key] ?? true, loader, `${path}.${key}`)
-      cache.set(key, child)
-      return child
-    }
-
-    // Wrap array as lazy cursor Proxy — per-index cache, stable identity
-    if (Array.isArray(val)) {
-      if (cache.has(key)) return cache.get(key)
-      const itemSchema = schema?.properties?.[key]?.items
-      const proxy = itemSchema
-        ? _makeArrayCursor(val, itemSchema, loader, `${path}.${key}`)
-        : val
-      cache.set(key, proxy)
-      return proxy
-    }
-
-    return val
+    return _treeGet(target, key)
   },
 
   set(target, key, value) {
-    if (typeof key === 'symbol' || key.startsWith('$'))
+    if (typeof key === 'symbol' || _isPassThroughSetKey(key))
       return Reflect.set(target, key, value)
-    const schema = target[_SCHEMA]
-    const loader = target[_LOADER]
-    const path   = target[_PATH]
-    const subSchema = schema?.properties?.[key] ?? true
-    validateType(value, subSchema, `${path}.${key}`, loader)
-    target[_RAW][key] = value
-    target[_CACHE].delete(key)
-    return true
+    return _treeSet(target, key, value)
   },
 
   has(target, key) {
-    const raw = target[_RAW]
-    if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
-      if (Object.prototype.hasOwnProperty.call(raw, key)) return true
-      return _schemaDefault(target[_SCHEMA], target[_LOADER], key) !== undefined
-    }
-    return key in target
+    return _treeHas(target, key)
   },
 
   ownKeys(target) {
-    const raw = target[_RAW]
-    if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
-      const rawKeys = Object.keys(raw)
-      const schemaProps = target[_SCHEMA]?.properties
-      if (!schemaProps) return rawKeys
-      const extra = Object.keys(schemaProps).filter(
-        k => !Object.prototype.hasOwnProperty.call(raw, k) &&
-             _schemaDefault(target[_SCHEMA], target[_LOADER], k) !== undefined
-      )
-      return extra.length ? [...rawKeys, ...extra] : rawKeys
-    }
-    return Reflect.ownKeys(target)
+    return _treeOwnKeys(target)
   },
 
   getOwnPropertyDescriptor(target, key) {
-    const raw = target[_RAW]
-    if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
-      const inRaw = Object.prototype.hasOwnProperty.call(raw, key)
-      const hasDefault = !inRaw && _schemaDefault(target[_SCHEMA], target[_LOADER], key) !== undefined
-      if (inRaw || hasDefault)
-        return { value: this.get(target, key, target), writable: true, enumerable: true, configurable: true }
-    }
-    return Reflect.getOwnPropertyDescriptor(target, key)
+    return _treeDescriptor(target, key)
   },
 }
 
@@ -612,6 +909,10 @@ function _ctxApplyDefaults(ctx) {
 }
 
 export class ObjectTree {
+  // L1 observer hook — null = disabled (zero cost). Set to fn(op, path, key, val, schema) to observe.
+  // schema = schema node for the property (undefined if no schema constraint)
+  static _observer = null
+
   constructor(data, schema, resolver, _path = '$') {
     if (schema === true || schema === undefined) {
       this[_RAW] = data; this[_SCHEMA] = schema; this[_LOADER] = null; this[_PATH] = _path; this[_CACHE] = new Map()
@@ -621,11 +922,15 @@ export class ObjectTree {
     if (schema === null || typeof schema !== 'object') throw new TypeError(`${_path}: invalid schema`)
 
     // Build ctx — the shared memory struct, all fns operate on this pointer
+    const loader = resolver instanceof Loader
+      ? resolver
+      : (!resolver && schema && typeof schema === 'object')
+        ? _defaultLoader(schema, null)
+        : new Loader(schema ?? true, typeof resolver === 'string' ? dirname(resolver) : (resolver || null))
     const ctx = {
       raw:    data,
       schema: schema,
-      loader: resolver instanceof Loader ? resolver
-        : new Loader(schema ?? true, typeof resolver === 'string' ? dirname(resolver) : (resolver || null)),
+      loader,
       path:   _path,
       errors: [],
     }
@@ -649,44 +954,8 @@ export class ObjectTree {
   }
 
   get $value() {
-    const raw = this[_RAW]
-    if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return raw
-    const schema  = this[_SCHEMA]
-    const loader  = this[_LOADER]
-    const path    = this[_PATH]
-    const cache   = this[_CACHE]
-    const props   = schema?.properties
-    // Collect keys: raw keys + schema-default-only keys
-    const keys = Object.keys(raw)
-    if (props) {
-      for (const k of Object.keys(props))
-        if (!Object.prototype.hasOwnProperty.call(raw, k) &&
-            _schemaDefault(schema, loader, k) !== undefined)
-          keys.push(k)
-    }
-    const out = Object.create(null)
-    for (const k of keys) {
-      let v = Object.prototype.hasOwnProperty.call(raw, k) ? raw[k]
-            : (() => { const d = _schemaDefault(schema, loader, k); return typeof d === 'object' && d !== null ? structuredClone(d) : d })()
-      if (v !== null && typeof v === 'object' && !Array.isArray(v)) {
-        const cached = cache.get(k)
-        out[k] = cached ? cached.$value : v
-      } else if (Array.isArray(v)) {
-        const itemSchema = schema?.properties?.[k]?.items
-        if (itemSchema) {
-          const arrayCursor = cache.has(k) ? cache.get(k) : _makeArrayCursor(v, itemSchema, loader, `${path}.${k}`)
-          out[k] = v.map((_, i) => {
-            const item = arrayCursor[i]
-            return item instanceof ObjectTree ? item.$value : item
-          })
-        } else {
-          out[k] = v
-        }
-      } else {
-        out[k] = v
-      }
-    }
-    return out
+    // 0.5.3 target: deterministic snapshot materialization, independent of read order/cache state.
+    return _treeSnapshot(this)
   }
 
   set $value(v) {
@@ -695,7 +964,7 @@ export class ObjectTree {
     this[_CACHE].clear()
   }
 
-  get $schema() { return _schemaToDict(this[_SCHEMA]) }
+  get $schema() { return _treeSchemaDict(this) }
 
   $oneOf() {
     const schemas = this[_SCHEMA]?.oneOf
@@ -718,6 +987,7 @@ export class ObjectTree {
   }
 
   $allOf() {
+    // 0.5.3 target: decide whether this should be a merge-view or a strict branch view.
     const schemas = this[_SCHEMA]?.allOf
     if (!schemas) throw new Error('Schema has no allOf')
     return new ObjectTree(this[_RAW], schemas.reduce(_deepMerge, {}), this[_LOADER])
@@ -739,23 +1009,11 @@ export class ObjectTree {
   }
 
   $project() {
-    const raw = this[_RAW]
-    if (raw === null || typeof raw !== 'object' || Array.isArray(raw))
-      throw new TypeError('project: data must be an object')
-    const props = this[_SCHEMA]?.properties
-    if (!props) return new ObjectTree(raw, this[_SCHEMA], this[_LOADER])
-    const out = Object.create(null)
-    for (const key of Object.keys(props))
-      if (Object.prototype.hasOwnProperty.call(raw, key)) out[key] = raw[key]
-    return new ObjectTree(out, this[_SCHEMA], this[_LOADER])
+    return _treeProject(this)
   }
 
   $withDefaults() {
-    const raw = this[_RAW]
-    if (raw === null || typeof raw !== 'object' || Array.isArray(raw))
-      throw new TypeError('withDefaults: data must be an object')
-    return new ObjectTree(_applyDefaults({ ...raw }, this[_SCHEMA], this[_LOADER]),
-                          this[_SCHEMA], this[_LOADER])
+    return _treeWithDefaults(this)
   }
 
   $contains() {
@@ -767,34 +1025,15 @@ export class ObjectTree {
   }
 
   $toDict() {
-    const raw = this[_RAW]
-    if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return raw
-    const props = this[_SCHEMA]?.properties
-    const keys = props ? Object.keys(props).filter(k => Object.prototype.hasOwnProperty.call(raw, k)) : Object.keys(raw)
-    const out = Object.create(null)
-    for (const k of keys) out[k] = raw[k]
-    return out
+    return _treeToDict(this)
   }
 
   $getSchema(path = '') {
-    if (!path) return this.$schema
-    const parts = path.split('.').filter(Boolean)
-    let node = this[_SCHEMA]
-    for (const part of parts) {
-      if (!node || typeof node !== 'object') return undefined
-      const props = node.properties
-      if (!props || !(part in props)) return undefined
-      node = props[part]
-    }
-    return _schemaToDict(node)
+    return _treeGetSchema(this, path)
   }
 
   $getExtensions(path = '') {
-    const node = path ? this.$getSchema(path) : this.$schema
-    if (!node || typeof node !== 'object') return {}
-    const out = {}
-    for (const [k, v] of Object.entries(node)) if (k.startsWith('x-')) out[k] = v
-    return out
+    return _treeGetExtensions(this, path)
   }
 
   toJSON()  { return this.$toDict() }
@@ -830,6 +1069,13 @@ function _applyDefaults(data, schema, loader) {
 }
 
 export function validate(data, schema, resolver) {
+  // 0.5.7 target: preserve full AggregateError diagnostics in the public API.
   try { new ObjectTree(data, schema, resolver); return { valid: true } }
-  catch (e) { return { valid: false, error: e.message } }
+  catch (e) {
+    return {
+      valid: false,
+      error: e.message,
+      errors: e.errors ? e.errors.map(err => err.message ?? String(err)) : undefined,
+    }
+  }
 }
