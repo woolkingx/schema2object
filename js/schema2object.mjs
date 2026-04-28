@@ -1,9 +1,9 @@
 /**
- * schema2object v0.6.0 — pointer + proxy + lazy baseline, forked from v0.5.9
+ * schema2object v0.6.1 — pointer + proxy + lazy baseline, forked from v0.5.9
  * Internal: fixed slots + direct memory ops. External: object API unchanged.
  * New: observer hook receives schema node as 5th param: fn(op, path, key, val, schema)
  *
- * 0.6.0 target areas:
+ * 0.6.1 target areas:
  * - keep Proxy-lazy access as the runtime core
  * - treat cache/index/default/schema lookup as direct memory ops
  * - avoid extra abstraction layers in hot paths
@@ -1042,20 +1042,33 @@ export class ObjectTree {
 
 function _applyDefaults(data, schema, loader) {
   if (!schema || typeof schema !== 'object') return data
-  const resolved = schema.$ref
-    ? loader.resolve(schema.$ref, loader.scopeOf(schema), loader.resourceOf(schema)).node
-    : schema
+  let resolved = schema
+  let resolvedLoader = loader
+  if (schema.$ref) {
+    const ref = loader.resolve(schema.$ref, loader.scopeOf(schema), loader.resourceOf(schema))
+    resolved = ref.node
+    resolvedLoader = ref.loader
+  }
   const props = resolved.properties
   if (!props || typeof props !== 'object') return data
   for (const [k, rawS] of Object.entries(props)) {
-    const s = rawS?.$ref ? loader.resolve(rawS.$ref, loader.scopeOf(rawS), loader.resourceOf(rawS)).node : rawS
+    let s = rawS
+    let sLoader = resolvedLoader
+    if (rawS?.$ref) {
+      const ref = resolvedLoader.resolve(
+        rawS.$ref,
+        resolvedLoader.scopeOf(rawS),
+        resolvedLoader.resourceOf(rawS))
+      s = ref.node
+      sLoader = ref.loader
+    }
     if (Object.prototype.hasOwnProperty.call(data, k)) {
       if (data[k] && typeof data[k] === 'object' && !Array.isArray(data[k]))
-        data[k] = _applyDefaults({ ...data[k] }, rawS, loader)
+        data[k] = _applyDefaults({ ...data[k] }, rawS, sLoader)
       else if (Array.isArray(data[k]) && s?.items && typeof s.items === 'object' && !Array.isArray(s.items))
         data[k] = data[k].map(item =>
           item && typeof item === 'object' && !Array.isArray(item)
-            ? _applyDefaults({ ...item }, s.items, loader)
+            ? _applyDefaults({ ...item }, s.items, sLoader)
             : item)
     } else {
       const def = Object.prototype.hasOwnProperty.call(rawS ?? {}, 'default') ? rawS.default

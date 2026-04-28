@@ -75,7 +75,7 @@ Thumbs.db
 **/.backup/
 draft-07/
 draft-07-remotes/
-docs/
+/docs/
 .pytest_cache/
 **/.pytest_cache/
 rust/target/

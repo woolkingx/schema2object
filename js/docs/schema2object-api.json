@@ -1,0 +1,181 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://schema2object.dev/api",
+  "title": "schema2object API Schema",
+  "description": "JSON Schema description of the schema2object public API. ObjectTree binds data and schema into one identity. validate() is the standalone validation window.",
+
+  "definitions": {
+
+    "anyValue": {
+      "description": "Any JSON-compatible value.",
+      "x-type": "any"
+    },
+
+    "schema": {
+      "description": "A JSON Schema Draft-07 document.",
+      "type": ["object", "boolean"]
+    },
+
+    "resolver": {
+      "description": "Controls how external $ref URIs are loaded.",
+      "anyOf": [
+        {
+          "type": "string",
+          "description": "Path to the schema file on disk. dirname(path) is used as base dir. All relative $ref paths resolve from there.",
+          "x-example": "/schemas/person.json"
+        },
+        {
+          "type": "object",
+          "description": "In-memory map of URI/key → schema object. $ref values looked up as keys (resolved URI first, then original ref string).",
+          "additionalProperties": { "$ref": "#/definitions/schema" },
+          "x-example": { "addr": { "type": "object" } }
+        },
+        {
+          "type": "string",
+          "x-form": "function",
+          "description": "Custom loader function. Called with resolved URI string. Must return a schema object synchronously.",
+          "x-signature": "(uri: string) => schema"
+        }
+      ]
+    },
+
+    "validateResult": {
+      "type": "object",
+      "description": "Result of validate(). valid=true means data satisfies schema. valid=false includes error message.",
+      "properties": {
+        "valid": { "type": "boolean" },
+        "error": { "type": "string", "description": "Present only when valid is false." }
+      },
+      "required": ["valid"]
+    },
+
+    "ObjectTree": {
+      "type": "object",
+      "description": "A schema-bound object. Data and schema are one identity. Validation is automatic on construction and on every property set.",
+      "x-static-fields": {
+        "_observer": {
+          "description": "Global observer hook for all ObjectTree instances. Set to fn(op, path, key, val, schema) to observe property access. Set to null to disable (zero cost).",
+          "x-signature": "(op: 'get'|'set', path: string, key: string, val: any, schema?: object) => void",
+          "x-default": null,
+          "x-behavior": [
+            "Called on every property get/set across all ObjectTree instances",
+            "schema parameter contains the schema node for the property (undefined if no constraint)",
+            "Cached object/array re-access does not re-emit (cache hit returns before hook)",
+            "null = disabled, no performance cost"
+          ],
+          "x-since": "v0.5.2"
+        }
+      },
+      "x-constructor": {
+        "signature": "new ObjectTree(data, schema, resolver?)",
+        "params": {
+          "data": { "$ref": "#/definitions/anyValue" },
+          "schema": { "$ref": "#/definitions/schema" },
+          "resolver": { "$ref": "#/definitions/resolver" }
+        },
+        "throws": "TypeError if data is invalid against schema.",
+        "behavior": [
+          "Top-level $ref is resolved before binding.",
+          "Data validated against schema (throws on invalid).",
+          "Defaults filled for missing keys only (invalid default throws).",
+          "Object-type data: Proxy cursor wraps raw object, nested access is lazy."
+        ]
+      },
+      "properties": {
+
+        "value": {
+          "description": "Get or set the raw data. Get returns internal data object (object schema) or scalar. Set validates against schema before storing.",
+          "x-get": { "returns": { "$ref": "#/definitions/anyValue" } },
+          "x-set": {
+            "param": { "$ref": "#/definitions/anyValue" },
+            "throws": "TypeError if value is invalid against schema."
+          }
+        },
+
+        "schema": {
+          "description": "Read-only. Returns the resolved schema as a plain object.",
+          "x-get": { "returns": { "$ref": "#/definitions/schema" } }
+        },
+
+        "toDict": {
+          "description": "Returns the schema-defined projection of data. Object nodes: only keys defined in schema.properties are included. Unknown fields are excluded. Scalar nodes: returns value directly.",
+          "x-signature": "toDict() → object | scalar",
+          "x-returns": { "$ref": "#/definitions/anyValue" }
+        },
+
+        "oneOf": {
+          "description": "Finds the exactly-matching subschema from schema.oneOf. Returns ObjectTree re-bound to that subschema.",
+          "x-signature": "oneOf() → ObjectTree",
+          "x-throws": "TypeError if 0 or 2+ subschemas match.",
+          "x-requires": "schema.oneOf"
+        },
+
+        "anyOf": {
+          "description": "Finds all matching subschemas from schema.anyOf. Returns array of ObjectTree, one per match.",
+          "x-signature": "anyOf() → ObjectTree[]",
+          "x-throws": "TypeError if no subschemas match.",
+          "x-requires": "schema.anyOf"
+        },
+
+        "allOf": {
+          "description": "Merges all subschemas from schema.allOf into one. Returns ObjectTree re-bound to merged schema.",
+          "x-signature": "allOf() → ObjectTree",
+          "x-requires": "schema.allOf"
+        },
+
+        "notOf": {
+          "description": "Returns true if data does NOT match schema.not. Returns true if schema.not is absent.",
+          "x-signature": "notOf() → boolean"
+        },
+
+        "ifThen": {
+          "description": "Evaluates schema.if against data. If match: returns ObjectTree re-bound to schema.then. If no match: re-bound to schema.else. If neither branch defined: returns self.",
+          "x-signature": "ifThen() → ObjectTree",
+          "x-requires": "schema.if"
+        },
+
+        "project": {
+          "description": "Returns a new ObjectTree containing only schema-defined properties. Same schema, subset of data. Does not re-validate.",
+          "x-signature": "project() → ObjectTree",
+          "x-throws": "TypeError if data is not an object."
+        },
+
+        "withDefaults": {
+          "description": "Returns a new ObjectTree with missing fields filled from schema 'default' values. Deep — applies defaults recursively to nested objects.",
+          "x-signature": "withDefaults() → ObjectTree",
+          "x-throws": "TypeError if data is not an object."
+        },
+
+        "contains": {
+          "description": "Returns true if at least one array element matches schema.contains. Returns null if data is not an array or schema.contains is absent.",
+          "x-signature": "contains() → boolean | null"
+        },
+
+        "getSchema": {
+          "description": "Returns the subschema at a dot-path. Empty string returns root schema.",
+          "x-signature": "getSchema(path?: string) → schema | undefined",
+          "x-example": "getSchema('address.zip') → { type: 'string', pattern: '...' }"
+        },
+
+        "getExtensions": {
+          "description": "Returns all x-* extension keys from the schema at a dot-path.",
+          "x-signature": "getExtensions(path?: string) → object"
+        }
+      }
+    }
+  },
+
+  "properties": {
+    "ObjectTree": { "$ref": "#/definitions/ObjectTree" },
+    "validate": {
+      "description": "Standalone validation. Validates data against schema without constructing an ObjectTree. Returns result instead of throwing.",
+      "x-signature": "validate(data, schema, resolver?) → validateResult",
+      "x-params": {
+        "data": { "$ref": "#/definitions/anyValue" },
+        "schema": { "$ref": "#/definitions/schema" },
+        "resolver": { "$ref": "#/definitions/resolver" }
+      },
+      "x-returns": { "$ref": "#/definitions/validateResult" }
+    }
+  }
+}
