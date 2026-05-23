@@ -1,0 +1,20 @@
+name: Tests
+
+on:
+  push:
+    branches: [ release ]
+  pull_request:
+    branches: [ release ]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Run JS API tests
+      run: node js/tests/validate.mjs
+
+    - name: Run Draft-07 suite
+      run: node js/tests/draft07_suite.mjs

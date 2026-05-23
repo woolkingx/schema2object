@@ -1,0 +1,6 @@
+{
+  "name": "deny-rm",
+  "event": "PreToolUse",
+  "action": "deny",
+  "match.command.name": "rm"
+}

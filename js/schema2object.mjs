@@ -1,14 +1,20 @@
 /**
- * schema2object v0.6.1 — pointer + proxy + lazy baseline, forked from v0.5.9
- * Internal: fixed slots + direct memory ops. External: object API unchanged.
- * New: observer hook receives schema node as 5th param: fn(op, path, key, val, schema)
+ * schema2object v0.7.0 — four-layer design: data / schema / validate / logic
  *
- * 0.6.1 target areas:
- * - keep Proxy-lazy access as the runtime core
- * - treat cache/index/default/schema lookup as direct memory ops
- * - avoid extra abstraction layers in hot paths
- * - keep writes staged and validation local
- * - prefer fixed structure over derived helper layers
+ * Layers:
+ *   Ontology     (data)     → raw plain JS values, untouched
+ *   Epistemology (schema)   → Loader + schema object
+ *   Normative    (boundary) → validate() — standalone gate, call at system boundaries
+ *   Logic        (derive)   → oneOf/anyOf/allOf/notOf/ifThen/project/withDefaults/contains
+ *
+ * ObjectTree = thin Proxy cursor (navigation + set, no construction-time validation)
+ * Logic functions = standalone exports; class $-methods are thin wrappers over them
+ *
+ * Changes from v0.6.1:
+ *   - new ObjectTree() no longer validates — pure navigation cursor
+ *   - validate() calls validateType directly, no longer depends on ObjectTree
+ *   - Logic layer extracted: oneOf/anyOf/allOf/notOf/ifThen/project/withDefaults/contains
+ *   - Removed: _runPipeline, _ctxApplyDefaults, _treeProject, _treeWithDefaults
  */
 
 import { readFileSync } from 'fs'
@@ -494,20 +500,6 @@ function _softValidate(data, schema, loader) {
   return errors.length === 0
 }
 
-// ─── ctx pipeline — direct call sequence (replaces graph scheduler) ──────────
-
-function _runPipeline(ctx) {
-  _ctxResolveSchema(ctx)
-  _vType(ctx.raw, ctx.schema, ctx.path, ctx.errors)
-  _vEnum(ctx.raw, ctx.schema, ctx.path, ctx.errors)
-  _vNumeric(ctx.raw, ctx.schema, ctx.path, ctx.errors)
-  _vString(ctx.raw, ctx.schema, ctx.path, ctx.errors)
-  _vArray(ctx.raw, ctx.schema, ctx.path, ctx.loader, ctx.errors, validateType)
-  _vObject(ctx.raw, ctx.schema, ctx.path, ctx.loader, ctx.errors, validateType)
-  _vCombinators(ctx.raw, ctx.schema, ctx.path, ctx.loader, ctx.errors, validateType)
-  _ctxApplyDefaults(ctx)
-}
-
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function _schemaToDict(schema) {
@@ -774,26 +766,6 @@ function _treeSchemaDict(target) {
   return _schemaToDict(target[_SCHEMA])
 }
 
-function _treeProject(target) {
-  const raw = target[_RAW]
-  if (raw === null || typeof raw !== 'object' || Array.isArray(raw))
-    throw new TypeError('project: data must be an object')
-  const props = target[_SCHEMA]?.properties
-  if (!props) return new ObjectTree(raw, target[_SCHEMA], target[_LOADER])
-  const out = Object.create(null)
-  for (const key of Object.keys(props))
-    if (Object.prototype.hasOwnProperty.call(raw, key)) out[key] = raw[key]
-  return new ObjectTree(out, target[_SCHEMA], target[_LOADER])
-}
-
-function _treeWithDefaults(target) {
-  const raw = target[_RAW]
-  if (raw === null || typeof raw !== 'object' || Array.isArray(raw))
-    throw new TypeError('withDefaults: data must be an object')
-  return new ObjectTree(_applyDefaults({ ...raw }, target[_SCHEMA], target[_LOADER]),
-                        target[_SCHEMA], target[_LOADER])
-}
-
 function _treeToDict(target) {
   const raw = target[_RAW]
   if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return raw
@@ -883,35 +855,23 @@ function _ctxResolveSchema(ctx) {
 // Step 2 — validate via graph scheduler (all 7 fns run in dependency order)
 // Handled by _scheduleGraph — no separate _ctxValidate needed
 
-// Step 3 — overlay top-level defaults into raw (only missing keys)
-function _ctxApplyDefaults(ctx) {
-  const { schema, loader, path } = ctx
-  let { raw } = ctx
-  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return
-  const props = schema?.properties
-  if (!props) return
-  let overlay = null
-  for (const [key, subSchema] of Object.entries(props)) {
-    if (Object.prototype.hasOwnProperty.call(raw, key)) continue
-    const resolved = subSchema?.$ref
-      ? loader.resolve(subSchema.$ref, loader.scopeOf(subSchema), loader.resourceOf(subSchema)).node
-      : subSchema
-    const def = Object.prototype.hasOwnProperty.call(subSchema ?? {}, 'default') ? subSchema.default
-              : (resolved && Object.prototype.hasOwnProperty.call(resolved, 'default')) ? resolved.default
-              : undefined
-    if (def !== undefined) {
-      validateType(def, subSchema, `${path}.${key}.<default>`, loader)
-      if (!overlay) overlay = Object.assign(Object.create(null), raw)
-      overlay[key] = typeof def === 'object' && def !== null ? structuredClone(def) : def
-    }
-  }
-  if (overlay) ctx.raw = overlay
-}
-
 export class ObjectTree {
   // L1 observer hook — null = disabled (zero cost). Set to fn(op, path, key, val, schema) to observe.
   // schema = schema node for the property (undefined if no schema constraint)
   static _observer = null
+
+  // Boundary entry point: validates data against schema before creating cursor.
+  // Use this when data comes from external sources (user input, API, files).
+  // new ObjectTree() is for internal use with already-validated data.
+  static from(data, schema, resolver) {
+    const loader = resolver instanceof Loader
+      ? resolver
+      : (!resolver && schema && typeof schema === 'object')
+        ? _defaultLoader(schema, null)
+        : new Loader(schema ?? true, typeof resolver === 'string' ? dirname(resolver) : (resolver || null))
+    validateType(data, schema, '$', loader)
+    return new ObjectTree(data, schema, loader)
+  }
 
   constructor(data, schema, resolver, _path = '$') {
     if (schema === true || schema === undefined) {
@@ -921,34 +881,20 @@ export class ObjectTree {
     if (schema === false) throw new TypeError(`${_path}: schema is false`)
     if (schema === null || typeof schema !== 'object') throw new TypeError(`${_path}: invalid schema`)
 
-    // Build ctx — the shared memory struct, all fns operate on this pointer
     const loader = resolver instanceof Loader
       ? resolver
       : (!resolver && schema && typeof schema === 'object')
         ? _defaultLoader(schema, null)
         : new Loader(schema ?? true, typeof resolver === 'string' ? dirname(resolver) : (resolver || null))
-    const ctx = {
-      raw:    data,
-      schema: schema,
-      loader,
-      path:   _path,
-      errors: [],
-    }
 
-    // Pipeline — resolveSchema → 7 validate fns → applyDefaults
-    _runPipeline(ctx)
+    // Resolve top-level $ref — updates schema + loader for cross-document refs
+    const ctx = { raw: data, schema, loader, path: _path, errors: [] }
+    _ctxResolveSchema(ctx)
 
-    // Error gate — all errors collected, throw once
-    if (ctx.errors.length) {
-      if (ctx.errors.length === 1) throw new TypeError(ctx.errors[0])
-      throw new AggregateError(ctx.errors.map(m => new TypeError(m)), 'validation failed')
-    }
-
-    // Mount ctx onto instance + wrap in Proxy
     this[_RAW]    = ctx.raw
     this[_SCHEMA] = ctx.schema
     this[_LOADER] = ctx.loader
-    this[_PATH]   = ctx.path
+    this[_PATH]   = _path
     this[_CACHE]  = new Map()
     return new Proxy(this, _HANDLER)
   }
@@ -966,63 +912,14 @@ export class ObjectTree {
 
   get $schema() { return _treeSchemaDict(this) }
 
-  $oneOf() {
-    const schemas = this[_SCHEMA]?.oneOf
-    if (!schemas) throw new Error('Schema has no oneOf')
-    const data = this[_RAW]
-    const loader = this[_LOADER]
-    const matches = schemas.filter(s => _softValidate(data, s, loader))
-    if (matches.length !== 1) throw new TypeError(`oneOf: expected exactly 1 match, got ${matches.length}`)
-    return new ObjectTree(data, matches[0], loader)
-  }
-
-  $anyOf() {
-    const schemas = this[_SCHEMA]?.anyOf
-    if (!schemas) throw new Error('Schema has no anyOf')
-    const data = this[_RAW]
-    const loader = this[_LOADER]
-    const matches = schemas.filter(s => _softValidate(data, s, loader))
-    if (matches.length === 0) throw new TypeError('anyOf: no schema matched')
-    return matches.map(s => new ObjectTree(data, s, loader))
-  }
-
-  $allOf() {
-    // 0.5.3 target: decide whether this should be a merge-view or a strict branch view.
-    const schemas = this[_SCHEMA]?.allOf
-    if (!schemas) throw new Error('Schema has no allOf')
-    return new ObjectTree(this[_RAW], schemas.reduce(_deepMerge, {}), this[_LOADER])
-  }
-
-  $notOf() {
-    const notSchema = this[_SCHEMA]?.not
-    if (!notSchema) return true
-    return !_softValidate(this[_RAW], notSchema, this[_LOADER])
-  }
-
-  $ifThen() {
-    const { if: ifSchema, then: thenSchema, else: elseSchema } = this[_SCHEMA] ?? {}
-    if (!ifSchema) return this
-    const data = this[_RAW]
-    const loader = this[_LOADER]
-    const branch = _softValidate(data, ifSchema, loader) ? thenSchema : elseSchema
-    return branch ? new ObjectTree(data, branch, loader) : this
-  }
-
-  $project() {
-    return _treeProject(this)
-  }
-
-  $withDefaults() {
-    return _treeWithDefaults(this)
-  }
-
-  $contains() {
-    const raw = this[_RAW]
-    if (!Array.isArray(raw)) return null
-    const cs = this[_SCHEMA]?.contains
-    if (!cs) return null
-    return raw.some(item => _softValidate(item, cs, this[_LOADER]))
-  }
+  $oneOf()        { return oneOf(this) }
+  $anyOf()        { return anyOf(this) }
+  $allOf()        { return allOf(this) }
+  $notOf()        { return notOf(this) }
+  $ifThen()       { return ifThen(this) }
+  $project()      { return project(this) }
+  $withDefaults() { return withDefaults(this) }
+  $contains()     { return contains(this) }
 
   $toDict() {
     return _treeToDict(this)
@@ -1038,6 +935,76 @@ export class ObjectTree {
 
   toJSON()  { return this.$toDict() }
   $toJSON() { return JSON.stringify(this.toJSON(), null, 2) }
+}
+
+// ─── Logic layer — standalone exports ─────────────────────────────────────────
+// First-principles boolean operators over schema branches.
+// ObjectTree.$-methods are thin wrappers; callers can also import these directly.
+
+export function oneOf(tree) {
+  const schemas = tree[_SCHEMA]?.oneOf
+  if (!schemas) throw new Error('Schema has no oneOf')
+  const data = tree[_RAW], loader = tree[_LOADER]
+  const matches = schemas.filter(s => _softValidate(data, s, loader))
+  if (matches.length !== 1) throw new TypeError(`oneOf: expected exactly 1 match, got ${matches.length}`)
+  return new ObjectTree(data, matches[0], loader)
+}
+
+export function anyOf(tree) {
+  const schemas = tree[_SCHEMA]?.anyOf
+  if (!schemas) throw new Error('Schema has no anyOf')
+  const data = tree[_RAW], loader = tree[_LOADER]
+  const matches = schemas.filter(s => _softValidate(data, s, loader))
+  if (matches.length === 0) throw new TypeError('anyOf: no schema matched')
+  return matches.map(s => new ObjectTree(data, s, loader))
+}
+
+export function allOf(tree) {
+  const schemas = tree[_SCHEMA]?.allOf
+  if (!schemas) throw new Error('Schema has no allOf')
+  return new ObjectTree(tree[_RAW], schemas.reduce(_deepMerge, {}), tree[_LOADER])
+}
+
+export function notOf(tree) {
+  const notSchema = tree[_SCHEMA]?.not
+  if (!notSchema) return true
+  return !_softValidate(tree[_RAW], notSchema, tree[_LOADER])
+}
+
+export function ifThen(tree) {
+  const { if: ifSchema, then: thenSchema, else: elseSchema } = tree[_SCHEMA] ?? {}
+  if (!ifSchema) return tree
+  const data = tree[_RAW], loader = tree[_LOADER]
+  const branch = _softValidate(data, ifSchema, loader) ? thenSchema : elseSchema
+  return branch ? new ObjectTree(data, branch, loader) : tree
+}
+
+export function project(tree) {
+  const raw = tree[_RAW]
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw))
+    throw new TypeError('project: data must be an object')
+  const props = tree[_SCHEMA]?.properties
+  if (!props) return new ObjectTree(raw, tree[_SCHEMA], tree[_LOADER])
+  const out = Object.create(null)
+  for (const key of Object.keys(props))
+    if (Object.prototype.hasOwnProperty.call(raw, key)) out[key] = raw[key]
+  return new ObjectTree(out, tree[_SCHEMA], tree[_LOADER])
+}
+
+export function withDefaults(tree) {
+  const raw = tree[_RAW]
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw))
+    throw new TypeError('withDefaults: data must be an object')
+  return new ObjectTree(_applyDefaults({ ...raw }, tree[_SCHEMA], tree[_LOADER]),
+                        tree[_SCHEMA], tree[_LOADER])
+}
+
+export function contains(tree) {
+  const raw = tree[_RAW]
+  if (!Array.isArray(raw)) return null
+  const cs = tree[_SCHEMA]?.contains
+  if (!cs) return null
+  return raw.some(item => _softValidate(item, cs, tree[_LOADER]))
 }
 
 function _applyDefaults(data, schema, loader) {
@@ -1082,9 +1049,15 @@ function _applyDefaults(data, schema, loader) {
 }
 
 export function validate(data, schema, resolver) {
-  // 0.5.7 target: preserve full AggregateError diagnostics in the public API.
-  try { new ObjectTree(data, schema, resolver); return { valid: true } }
-  catch (e) {
+  const loader = resolver instanceof Loader
+    ? resolver
+    : (!resolver && schema && typeof schema === 'object')
+      ? _defaultLoader(schema, null)
+      : new Loader(schema ?? true, typeof resolver === 'string' ? dirname(resolver) : (resolver || null))
+  try {
+    validateType(data, schema, '$', loader)
+    return { valid: true }
+  } catch(e) {
     return {
       valid: false,
       error: e.message,

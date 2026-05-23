@@ -1,0 +1,295 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>schema2object Handbook</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f7f7f4;
+      --panel: #ffffff;
+      --text: #1e2424;
+      --muted: #5f6868;
+      --line: #d9ded8;
+      --accent: #1b6f6a;
+    }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font: 16px/1.55 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    .layout {
+      display: grid;
+      grid-template-columns: minmax(220px, 280px) minmax(0, 1fr);
+      min-height: 100vh;
+    }
+    aside {
+      border-right: 1px solid var(--line);
+      padding: 28px 24px;
+      background: #eef2ee;
+    }
+    main {
+      max-width: 920px;
+      padding: 34px 40px 56px;
+    }
+    h1, h2 {
+      line-height: 1.2;
+      margin: 0 0 14px;
+    }
+    h2 {
+      margin-top: 34px;
+      padding-top: 6px;
+      border-top: 1px solid var(--line);
+    }
+    p {
+      margin: 0 0 16px;
+    }
+    a {
+      color: var(--accent);
+      text-decoration: none;
+    }
+    a:hover {
+      text-decoration: underline;
+    }
+    ul, ol {
+      padding-left: 22px;
+    }
+    li {
+      margin: 6px 0;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      background: var(--panel);
+      border: 1px solid var(--line);
+    }
+    th, td {
+      text-align: left;
+      vertical-align: top;
+      border-bottom: 1px solid var(--line);
+      padding: 10px 12px;
+    }
+    th {
+      background: #edf4f1;
+    }
+    code, pre {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 0.95em;
+    }
+    pre {
+      background: #172121;
+      color: #eef7f4;
+      padding: 14px 16px;
+      overflow: auto;
+    }
+    .muted {
+      color: var(--muted);
+    }
+    @media (max-width: 760px) {
+      .layout {
+        display: block;
+      }
+      aside {
+        border-right: 0;
+        border-bottom: 1px solid var(--line);
+      }
+      main {
+        padding: 26px 22px 44px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="layout">
+    <aside>
+      <h1>schema2object</h1>
+      <p class="muted">Handbook entry. Architecture and usage navigation live here; the active runtime code lives under <code>js/</code>.</p>
+      <nav>
+        <ul>
+          <li><a href="#skills">Handbook Skills</a></li>
+          <li><a href="#guide">Guide</a></li>
+          <li><a href="#runtime">Runtime</a></li>
+          <li><a href="#examples">Examples</a></li>
+          <li><a href="#draft07">Draft-07</a></li>
+          <li><a href="#language">Language</a></li>
+          <li><a href="#reference">Reference</a></li>
+          <li><a href="changelog.md">Changelog</a></li>
+        </ul>
+      </nav>
+    </aside>
+    <main>
+      <h1>Handbook Entry</h1>
+      <p><code>schema2object</code> is a JavaScript runtime that binds JSON Schema Draft-07 to live runtime objects.</p>
+      <p>Current repository posture: JavaScript is the only active runtime implementation. Python, Rust, and TypeScript chapters are projection/reference notes for carrying the same schema truth into other ecosystems.</p>
+      <p>The legal entry posture is: schema file first, root loader second, resolved schema node third, then <code>validate()</code> or <code>ObjectTree.from()</code> at the boundary.</p>
+
+      <section id="entry">
+      <h2>Reader Contract</h2>
+      <p>Use this handbook as a routing system. Usage is a standalone chapter; runtime docs describe the API surface; Draft-07 docs define schema legality; language docs are projection guidance only; proof requires fresh gates.</p>
+
+      <h2>Source Of Truth</h2>
+      <table>
+        <tr><th>Path</th><th>Owns</th></tr>
+        <tr><td><code>js/schema2object.mjs</code></td><td>Canonical JavaScript runtime.</td></tr>
+        <tr><td><code>js/examples/schema.json</code></td><td>Example schema entrypoint used by runnable examples.</td></tr>
+        <tr><td><code>js/examples/*.mjs</code></td><td>Runnable usage examples that must enter through a schema file.</td></tr>
+        <tr><td><code>js/tests/</code></td><td>Runtime proof gates.</td></tr>
+        <tr><td><code>docs/handbook/guide/</code></td><td>Textbook-style guide: mental model, correct posture, warnings, common mistakes, and checkpoints.</td></tr>
+        <tr><td><code>docs/handbook/handbook-skills.md</code></td><td>Handbook stage routing, ownership, and maintenance gates.</td></tr>
+        <tr><td><code>docs/handbook/runtime/</code></td><td>Runtime docs and JS schema/API contracts.</td></tr>
+        <tr><td><code>docs/handbook/language/</code></td><td>Projection/reference guidance only; no active Python, Rust, or TypeScript runtime package is owned here.</td></tr>
+        <tr><td><code>docs/draft-07/</code></td><td>Draft-07 conformance fixtures.</td></tr>
+        <tr><td><code>docs/draft-07-remotes/</code></td><td>Remote <code>$ref</code> conformance fixtures.</td></tr>
+      </table>
+
+      <h2>Forbidden Drift</h2>
+      <ul>
+        <li>Do not reintroduce active <code>python/</code>, <code>rust/</code>, TypeScript package code, <code>references/</code>, or <code>js/lab/</code>.</li>
+        <li>Do not make examples with inline schema objects as the primary posture.</li>
+        <li>Do not use <code>new ObjectTree()</code> as the external validation boundary.</li>
+        <li>Do not scatter durable documentation outside <code>docs/handbook/</code>.</li>
+      </ul>
+
+      <h2 id="skills">Handbook Skills</h2>
+      <p><a href="handbook-skills.md">Handbook Skills</a> defines the stage cards, chapter ownership matrix, maintenance rules, and verification command set for this documentation system.</p>
+      <table>
+        <tr><th>Stage</th><th>Owning chapter</th><th>Gate</th></tr>
+        <tr><td>Usage</td><td><a href="runtime/schema2object-usage.md">schema2object Usage Guide</a></td><td><code>GATE-USAGE-01</code>: standalone and untouched unless explicitly requested.</td></tr>
+        <tr><td>Guide</td><td><a href="guide/01-mental-model.md">Mental Model</a> through <a href="guide/09-common-mistakes.md">Common Mistakes</a></td><td><code>GATE-GUIDE-01</code>: guide teaches the posture without changing frozen runtime files.</td></tr>
+        <tr><td>Runtime</td><td><a href="runtime/javascript.md">JavaScript Runtime Guide</a></td><td><code>GATE-RUNTIME-01</code>: examples agree with <code>js/schema2object.mjs</code>.</td></tr>
+        <tr><td>Schema</td><td><a href="draft-07/keywords.md">Draft-07 Keyword Notes</a></td><td><code>GATE-SCHEMA-01</code>: keyword notes agree with Draft-07 fixtures.</td></tr>
+        <tr><td>Projection</td><td><a href="language/quick-start.md">Language Quick Start</a></td><td><code>GATE-PROJECTION-01</code>: no active non-JS runtime ownership.</td></tr>
+        <tr><td>Proof</td><td><code>js/examples/</code> and <code>js/tests/</code></td><td>Fresh command output before completion claims.</td></tr>
+      </table>
+
+      <h2>Reading Order</h2>
+      <ol>
+        <li><a href="handbook-skills.md">Handbook Skills And Stage Map</a></li>
+        <li><a href="guide/01-mental-model.md">Mental Model</a></li>
+        <li><a href="guide/02-schema-file-first.md">Schema File First</a></li>
+        <li><a href="guide/03-boundary-validation.md">Boundary Validation</a></li>
+        <li><a href="guide/04-object-cursor.md">Object Cursor</a></li>
+        <li><a href="guide/05-defaults.md">Defaults</a></li>
+        <li><a href="guide/06-ref-resolution.md">Reference Resolution</a></li>
+        <li><a href="guide/07-dot-key-authoring.md">Dot-Key Authoring</a></li>
+        <li><a href="guide/08-observer-hooks.md">Observer Hooks</a></li>
+        <li><a href="guide/09-common-mistakes.md">Common Mistakes</a></li>
+        <li><a href="runtime/javascript.md">Runtime JavaScript Reference</a></li>
+        <li><a href="runtime/schema2object-usage.md">Operational Usage Reference</a></li>
+        <li><a href="language/quick-start.md">Optional Projection Quick Start</a></li>
+        <li><a href="language/typescript-ajv.md">Optional TypeScript Ajv Projection</a></li>
+        <li><a href="language/python.md">Optional Python Projection</a></li>
+        <li><a href="language/rust.md">Optional Rust Projection</a></li>
+        <li><a href="draft-07/keywords.md">Draft-07 Keyword Notes</a></li>
+        <li><a href="roadmap.md">Roadmap</a></li>
+      </ol>
+
+      <h2 id="guide">Guide Chapter Map</h2>
+      <p>The guide is the textbook path. It teaches how the runtime should be used, what to watch for, and which mistakes to avoid. It does not replace the frozen operational usage guide or the runtime source.</p>
+      <table>
+        <tr><th>Chapter</th><th>Role</th></tr>
+        <tr><td><a href="guide/01-mental-model.md">01. Mental Model</a></td><td>Schema as object class, data as instance, boundary as legality gate, cursor as live access.</td></tr>
+        <tr><td><a href="guide/02-schema-file-first.md">02. Schema File First</a></td><td>Correct entry through <code>schema.json</code>, <code>Loader</code>, and resolved schema nodes.</td></tr>
+        <tr><td><a href="guide/03-boundary-validation.md">03. Boundary Validation</a></td><td>When to use <code>validate()</code>, <code>ObjectTree.from()</code>, and <code>new ObjectTree()</code>.</td></tr>
+        <tr><td><a href="guide/04-object-cursor.md">04. Object Cursor</a></td><td>Live access, mutation, raw value, and schema-defined export.</td></tr>
+        <tr><td><a href="guide/05-defaults.md">05. Defaults</a></td><td>Lazy defaults, explicit materialization, and default-related traps.</td></tr>
+        <tr><td><a href="guide/06-ref-resolution.md">06. Reference Resolution</a></td><td>Why resolved schema nodes and returned loaders travel together.</td></tr>
+        <tr><td><a href="guide/07-dot-key-authoring.md">07. Dot-Key Authoring</a></td><td>Flat authoring input, nested runtime shape, and final boundary validation.</td></tr>
+        <tr><td><a href="guide/08-observer-hooks.md">08. Observer Hooks</a></td><td>Instrumentation posture for schema-aware get/set events.</td></tr>
+        <tr><td><a href="guide/09-common-mistakes.md">09. Common Mistakes</a></td><td>Fast correction table for common documentation and runtime drifts.</td></tr>
+      </table>
+
+      <h2 id="runtime">Runtime Chapter Map</h2>
+      <table>
+        <tr><th>Chapter</th><th>Role</th></tr>
+        <tr><td><a href="runtime/schema2object-usage.md">schema2object Usage Guide</a></td><td>Independent operational chapter: schema file, root loader, resolved node, boundary validation.</td></tr>
+        <tr><td><a href="runtime/javascript.md">JavaScript Runtime Guide</a></td><td>API surface for <code>ObjectTree</code>, <code>Loader</code>, and <code>validate()</code>; does not replace the usage guide.</td></tr>
+        <tr><td><a href="runtime/schema2object-api.json">schema2object API Contract</a></td><td>Machine-readable API contract.</td></tr>
+        <tr><td><a href="runtime/schema2object.schema.json">schema2object Runtime Schema</a></td><td>Schema description of the runtime surface.</td></tr>
+      </table>
+
+      <h2 id="examples">Example Chapter Map</h2>
+      <table>
+        <tr><th>File</th><th>Role</th></tr>
+        <tr><td><a href="../../js/examples/schema.json">js/examples/schema.json</a></td><td>Single schema entrypoint for examples.</td></tr>
+        <tr><td><a href="../../js/examples/user.json">js/examples/user.json</a></td><td>External user data used by boundary examples.</td></tr>
+        <tr><td><a href="../../js/examples/rule.flat.json">js/examples/rule.flat.json</a></td><td>Flat authoring data used by the dot-key cursor example.</td></tr>
+        <tr><td><a href="../../js/examples/basic.mjs">js/examples/basic.mjs</a></td><td>Schema file to <code>Loader.resolve()</code> to <code>validate()</code> and <code>ObjectTree.from()</code>.</td></tr>
+        <tr><td><a href="../../js/examples/dotkey.mjs">js/examples/dotkey.mjs</a></td><td>Flat JSON authoring to internal cursor expansion to final boundary validation.</td></tr>
+        <tr><td><a href="../../js/examples/observer_schema_context.mjs">js/examples/observer_schema_context.mjs</a></td><td>Observer hook with schema metadata from the resolved schema node.</td></tr>
+      </table>
+
+      <h2 id="draft07">Draft-07 Chapter Map</h2>
+      <table>
+        <tr><th>Chapter</th><th>Role</th></tr>
+        <tr><td><a href="draft-07/schema-as-object.md">Schema As Object</a></td><td>Foundational identity: schema is data and class definition.</td></tr>
+        <tr><td><a href="draft-07/structure.md">Structure</a></td><td>JSON Schema document structure.</td></tr>
+        <tr><td><a href="draft-07/types.md">Types</a></td><td>Draft-07 type semantics.</td></tr>
+        <tr><td><a href="draft-07/keywords.md">Keywords</a></td><td>Implementation reference for the active JS runtime and projection reference for other languages.</td></tr>
+        <tr><td><a href="draft-07/composition.md">Composition</a></td><td><code>allOf</code>, <code>anyOf</code>, <code>oneOf</code>, and related composition semantics.</td></tr>
+        <tr><td><a href="draft-07/conditionals.md">Conditionals</a></td><td><code>if</code>, <code>then</code>, and <code>else</code>.</td></tr>
+        <tr><td><a href="draft-07/annotations.md">Annotations</a></td><td>Annotation keyword behavior.</td></tr>
+        <tr><td><a href="draft-07/spec.json">Draft-07 Spec JSON</a></td><td>Local JSON spec artifact.</td></tr>
+        <tr><td><a href="draft-07/meta-schema.json">Draft-07 Meta-schema</a></td><td>Local Draft-07 meta-schema artifact.</td></tr>
+      </table>
+
+      <h2 id="language">Language Projection Map</h2>
+      <table>
+        <tr><th>Chapter</th><th>Role</th></tr>
+        <tr><td><a href="language/quick-start.md">Language Quick Start</a></td><td>Optional projection overview. It does not define active runtime package usage.</td></tr>
+        <tr><td><a href="language/typescript-ajv.md">TypeScript Ajv Projection</a></td><td>TypeScript type/validator projection guidance only.</td></tr>
+        <tr><td><a href="language/python.md">Python Projection</a></td><td>Python-native projection guidance only.</td></tr>
+        <tr><td><a href="language/rust.md">Rust Projection</a></td><td>Rust-native projection guidance only.</td></tr>
+      </table>
+
+      <h2 id="reference">Reference Appendix</h2>
+      <p>These files are local JSON Schema reference material. They are appendix material, not active runtime source.</p>
+      <table>
+        <tr><th>File</th><th>Role</th></tr>
+        <tr><td><a href="json-schema-reference/annotations.md">annotations.md</a></td><td>JSON Schema reference note.</td></tr>
+        <tr><td><a href="json-schema-reference/array.md">array.md</a></td><td>JSON Schema reference note.</td></tr>
+        <tr><td><a href="json-schema-reference/boolean.md">boolean.md</a></td><td>JSON Schema reference note.</td></tr>
+        <tr><td><a href="json-schema-reference/combining.md">combining.md</a></td><td>JSON Schema reference note.</td></tr>
+        <tr><td><a href="json-schema-reference/enum-const.md">enum-const.md</a></td><td>JSON Schema reference note.</td></tr>
+        <tr><td><a href="json-schema-reference/non-json-data.md">non-json-data.md</a></td><td>JSON Schema reference note.</td></tr>
+        <tr><td><a href="json-schema-reference/null.md">null.md</a></td><td>JSON Schema reference note.</td></tr>
+        <tr><td><a href="json-schema-reference/numeric.md">numeric.md</a></td><td>JSON Schema reference note.</td></tr>
+        <tr><td><a href="json-schema-reference/object.md">object.md</a></td><td>JSON Schema reference note.</td></tr>
+        <tr><td><a href="json-schema-reference/regular-expressions.md">regular-expressions.md</a></td><td>JSON Schema reference note.</td></tr>
+        <tr><td><a href="json-schema-reference/schema-dialect.md">schema-dialect.md</a></td><td>JSON Schema reference note.</td></tr>
+        <tr><td><a href="json-schema-reference/string.md">string.md</a></td><td>JSON Schema reference note.</td></tr>
+        <tr><td><a href="json-schema-reference/structuring.md">structuring.md</a></td><td>JSON Schema reference note.</td></tr>
+        <tr><td><a href="json-schema-reference/type.md">type.md</a></td><td>JSON Schema reference note.</td></tr>
+      </table>
+
+      <h2>Decisions And Project State</h2>
+      <table>
+        <tr><th>Chapter</th><th>Role</th></tr>
+        <tr><td><a href="decisions/language-reference-canonicalization.md">Language Reference Canonicalization</a></td><td>Decision record for moving language projection docs into this handbook.</td></tr>
+        <tr><td><a href="handbook-skills.md">Handbook Skills</a></td><td>Stage routing, chapter ownership, and verification gates.</td></tr>
+        <tr><td><a href="changelog.md">Changelog</a></td><td>Release history and historical notes.</td></tr>
+        <tr><td><a href="roadmap.md">Roadmap</a></td><td>Remaining and future work.</td></tr>
+      </table>
+
+      <h2>Proof Fixtures</h2>
+      <table>
+        <tr><th>Path</th><th>Role</th></tr>
+        <tr><td><code>docs/draft-07/</code></td><td>Official Draft-07 conformance fixture data used by <code>node js/tests/draft07_suite.mjs</code>.</td></tr>
+        <tr><td><code>docs/draft-07-remotes/</code></td><td>Remote <code>$ref</code> fixture data used by the same suite.</td></tr>
+      </table>
+
+      <h2>Gates</h2>
+      <pre><code>node js/examples/basic.mjs
+node js/examples/dotkey.mjs
+node js/examples/observer_schema_context.mjs
+node js/tests/validate.mjs
+node js/tests/draft07_suite.mjs
+node js/tests/performance.mjs</code></pre>
+      <p><code>GATE-HANDBOOK-01</code>: completion claims for handbook behavior require fresh output from the relevant gate.</p>
+      </section>
+    </main>
+  </div>
+</body>
+</html>

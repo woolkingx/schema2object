@@ -1,0 +1,78 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "schema2object.examples.schema.json",
+  "title": "schema2object examples",
+  "type": "object",
+  "definitions": {
+    "User": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "description": "User display name",
+          "x-observable": true
+        },
+        "email": {
+          "type": "string",
+          "format": "email",
+          "description": "Contact email",
+          "x-observable": true
+        },
+        "age": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 120
+        },
+        "role": {
+          "type": "string",
+          "enum": ["admin", "user", "guest"],
+          "default": "user"
+        },
+        "internalToken": {
+          "type": "string",
+          "x-observable": false
+        }
+      },
+      "required": ["name", "email", "age"],
+      "additionalProperties": false
+    },
+    "Rule": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "event": {
+          "type": "string",
+          "enum": ["PreToolUse", "PostToolUse"]
+        },
+        "action": {
+          "type": "string",
+          "enum": ["allow", "deny"]
+        },
+        "match": {
+          "type": "object",
+          "properties": {
+            "command": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": ["name"],
+              "additionalProperties": false
+            }
+          },
+          "required": ["command"],
+          "additionalProperties": false
+        }
+      },
+      "required": ["name", "event", "action", "match"],
+      "additionalProperties": false
+    }
+  }
+}

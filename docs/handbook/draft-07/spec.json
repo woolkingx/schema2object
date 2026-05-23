@@ -1,0 +1,544 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://schema2object.dev/draft-07-spec",
+  "title": "Draft-07 Validation Spec as JSON Schema",
+  "description": "Each keyword's structure, constraint type, applicability, and behavior encoded in JSON Schema with x- extensions.",
+
+  "definitions": {
+    "schema": {
+      "description": "A valid JSON Schema is either a boolean or an object.",
+      "type": ["object", "boolean"],
+      "x-behavior": "true accepts everything, false rejects everything."
+    },
+    "nonNegativeInteger": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "nonNegativeIntegerDefault0": {
+      "allOf": [
+        { "$ref": "#/definitions/nonNegativeInteger" },
+        { "default": 0 }
+      ]
+    },
+    "simpleTypes": {
+      "enum": ["array", "boolean", "integer", "null", "number", "object", "string"]
+    },
+    "stringArray": {
+      "type": "array",
+      "items": { "type": "string" },
+      "uniqueItems": true,
+      "default": []
+    }
+  },
+
+  "type": ["object", "boolean"],
+  "default": true,
+  "properties": {
+
+    "type": {
+      "title": "type",
+      "description": "Restricts the instance to one or more primitive types.",
+      "anyOf": [
+        { "$ref": "#/definitions/simpleTypes" },
+        {
+          "type": "array",
+          "items": { "$ref": "#/definitions/simpleTypes" },
+          "minItems": 1,
+          "uniqueItems": true
+        }
+      ],
+      "x-applies-to": "any",
+      "x-behavior": "Instance valid iff it matches any listed type. 'integer' matches any number with zero fractional part (1.0 is integer). boolean is NOT a subtype of integer or number."
+    },
+
+    "enum": {
+      "title": "enum",
+      "description": "Restricts to a fixed set of values.",
+      "type": "array",
+      "items": true,
+      "x-applies-to": "any",
+      "x-behavior": "Valid iff instance equals (deep equality) any element. Elements may be any type including null. true !== 1, false !== 0.",
+      "x-spec-level": "SHOULD have at least one element, SHOULD be unique (not MUST)"
+    },
+
+    "const": {
+      "title": "const",
+      "description": "Restricts to a single value.",
+      "x-applies-to": "any",
+      "x-behavior": "Valid iff instance equals (deep equality) this value. Equivalent to enum with one element.",
+      "x-since": "Draft-06"
+    },
+
+    "multipleOf": {
+      "title": "multipleOf",
+      "type": "number",
+      "exclusiveMinimum": 0,
+      "x-applies-to": "number, integer",
+      "x-behavior": "Valid iff instance / multipleOf is an integer. Spec requires exact integer result. Tolerance (e.g. 1e-9) is an implementation detail, not spec-mandated."
+    },
+
+    "maximum": {
+      "title": "maximum",
+      "type": "number",
+      "x-applies-to": "number, integer",
+      "x-behavior": "Inclusive upper bound. Valid iff instance <= maximum."
+    },
+
+    "exclusiveMaximum": {
+      "title": "exclusiveMaximum",
+      "type": "number",
+      "x-applies-to": "number, integer",
+      "x-behavior": "Exclusive upper bound. Valid iff instance < exclusiveMaximum. Draft-07: numeric value (not boolean like Draft-04)."
+    },
+
+    "minimum": {
+      "title": "minimum",
+      "type": "number",
+      "x-applies-to": "number, integer",
+      "x-behavior": "Inclusive lower bound. Valid iff instance >= minimum."
+    },
+
+    "exclusiveMinimum": {
+      "title": "exclusiveMinimum",
+      "type": "number",
+      "x-applies-to": "number, integer",
+      "x-behavior": "Exclusive lower bound. Valid iff instance > exclusiveMinimum. Draft-07: numeric value (not boolean like Draft-04)."
+    },
+
+    "maxLength": {
+      "title": "maxLength",
+      "$ref": "#/definitions/nonNegativeInteger",
+      "x-applies-to": "string",
+      "x-behavior": "Valid iff string length <= maxLength. Length = number of Unicode characters (RFC 7159)."
+    },
+
+    "minLength": {
+      "title": "minLength",
+      "$ref": "#/definitions/nonNegativeIntegerDefault0",
+      "x-applies-to": "string",
+      "x-behavior": "Valid iff string length >= minLength. Omitting = 0."
+    },
+
+    "pattern": {
+      "title": "pattern",
+      "type": "string",
+      "format": "regex",
+      "x-applies-to": "string",
+      "x-behavior": "Valid iff regex matches anywhere in the string. ECMA 262 dialect. NOT anchored — pattern 'es' matches 'expression'. Use ^...$ to anchor."
+    },
+
+    "items": {
+      "title": "items",
+      "anyOf": [
+        { "$ref": "#/definitions/schema" },
+        {
+          "type": "array",
+          "items": { "$ref": "#/definitions/schema" },
+          "minItems": 1
+        }
+      ],
+      "x-applies-to": "array",
+      "x-behavior-list": "Single schema: every element must validate against it. Empty array always valid.",
+      "x-behavior-tuple": "Array of schemas: element[i] validates against items[i]. Extra elements beyond items.length governed by additionalItems.",
+      "x-default": "true (empty schema — no constraint)"
+    },
+
+    "additionalItems": {
+      "title": "additionalItems",
+      "$ref": "#/definitions/schema",
+      "x-applies-to": "array",
+      "x-behavior": "Only active when items is an array (tuple form). Elements beyond items.length must validate against this schema. IGNORED when items is a single schema or absent.",
+      "x-default": "true (empty schema)"
+    },
+
+    "maxItems": {
+      "title": "maxItems",
+      "$ref": "#/definitions/nonNegativeInteger",
+      "x-applies-to": "array",
+      "x-behavior": "Valid iff array.length <= maxItems."
+    },
+
+    "minItems": {
+      "title": "minItems",
+      "$ref": "#/definitions/nonNegativeIntegerDefault0",
+      "x-applies-to": "array",
+      "x-behavior": "Valid iff array.length >= minItems. Omitting = 0."
+    },
+
+    "uniqueItems": {
+      "title": "uniqueItems",
+      "type": "boolean",
+      "default": false,
+      "x-applies-to": "array",
+      "x-behavior": "When true, all elements must be unique. Deep equality: true !== 1, {a:1,b:2} === {b:2,a:1} (key order irrelevant). Omitting = false."
+    },
+
+    "contains": {
+      "title": "contains",
+      "$ref": "#/definitions/schema",
+      "x-applies-to": "array",
+      "x-behavior": "Valid iff at least one element validates against this schema. Empty array always fails.",
+      "x-since": "Draft-06"
+    },
+
+    "properties": {
+      "title": "properties",
+      "type": "object",
+      "additionalProperties": { "$ref": "#/definitions/schema" },
+      "x-applies-to": "object",
+      "x-behavior": "For each name in both instance and this keyword: child instance must validate against corresponding schema. Missing properties are NOT errors. Omitting = {}.",
+      "default": {}
+    },
+
+    "patternProperties": {
+      "title": "patternProperties",
+      "type": "object",
+      "additionalProperties": { "$ref": "#/definitions/schema" },
+      "propertyNames": { "format": "regex" },
+      "x-applies-to": "object",
+      "x-behavior": "Each key is a regex (ECMA 262, unanchored). For each instance property whose name matches, validate value against corresponding schema. A property can match multiple patterns — must validate against all. Matched properties excluded from additionalProperties.",
+      "default": {}
+    },
+
+    "additionalProperties": {
+      "title": "additionalProperties",
+      "$ref": "#/definitions/schema",
+      "x-applies-to": "object",
+      "x-behavior": "Applies to properties NOT matched by 'properties' or 'patternProperties' in the SAME subschema. Cannot see across allOf boundaries. false = no extra properties allowed. schema = extras must match. Omitting = true (empty schema).",
+      "x-scope": "same subschema only"
+    },
+
+    "required": {
+      "title": "required",
+      "$ref": "#/definitions/stringArray",
+      "x-applies-to": "object",
+      "x-behavior": "Every listed name must exist as a property. null value IS present (satisfies required). Omitting = []."
+    },
+
+    "propertyNames": {
+      "title": "propertyNames",
+      "$ref": "#/definitions/schema",
+      "x-applies-to": "object",
+      "x-behavior": "Every property NAME (key) must validate against this schema. Keys are always strings, so typically uses string constraints (pattern, minLength, etc.).",
+      "x-since": "Draft-06"
+    },
+
+    "minProperties": {
+      "title": "minProperties",
+      "$ref": "#/definitions/nonNegativeIntegerDefault0",
+      "x-applies-to": "object",
+      "x-behavior": "Valid iff Object.keys(instance).length >= minProperties. Omitting = 0."
+    },
+
+    "maxProperties": {
+      "title": "maxProperties",
+      "$ref": "#/definitions/nonNegativeInteger",
+      "x-applies-to": "object",
+      "x-behavior": "Valid iff Object.keys(instance).length <= maxProperties."
+    },
+
+    "dependencies": {
+      "title": "dependencies",
+      "type": "object",
+      "additionalProperties": {
+        "anyOf": [
+          { "$ref": "#/definitions/schema" },
+          { "$ref": "#/definitions/stringArray" }
+        ]
+      },
+      "x-applies-to": "object",
+      "x-behavior-array": "If dependency key exists in instance, every string in the array must also exist as a property.",
+      "x-behavior-schema": "If dependency key exists in instance, the ENTIRE instance must validate against the dependency schema.",
+      "x-note": "Draft-07 keeps both forms. May be split into dependentRequired + dependentSchemas in future drafts."
+    },
+
+    "allOf": {
+      "title": "allOf",
+      "type": "array",
+      "items": { "$ref": "#/definitions/schema" },
+      "minItems": 1,
+      "x-applies-to": "any",
+      "x-behavior": "Valid iff instance validates against ALL subschemas (AND). Not for OO inheritance — each subschema evaluated independently."
+    },
+
+    "anyOf": {
+      "title": "anyOf",
+      "type": "array",
+      "items": { "$ref": "#/definitions/schema" },
+      "minItems": 1,
+      "x-applies-to": "any",
+      "x-behavior": "Valid iff instance validates against at least one subschema (OR)."
+    },
+
+    "oneOf": {
+      "title": "oneOf",
+      "type": "array",
+      "items": { "$ref": "#/definitions/schema" },
+      "minItems": 1,
+      "x-applies-to": "any",
+      "x-behavior": "Valid iff instance validates against EXACTLY one subschema (XOR). Zero matches = invalid. Two+ matches = invalid."
+    },
+
+    "not": {
+      "title": "not",
+      "$ref": "#/definitions/schema",
+      "x-applies-to": "any",
+      "x-behavior": "Valid iff instance does NOT validate against this schema."
+    },
+
+    "if": {
+      "title": "if",
+      "$ref": "#/definitions/schema",
+      "x-applies-to": "any",
+      "x-behavior": "Evaluates instance against this schema. Result controls whether 'then' or 'else' applies. No direct effect on validation. When 'if' is absent, 'then' and 'else' always succeed (validation passes). This differs from 'ignored' — annotations may still be collected.",
+      "x-cross-boundary": "if/then/else MUST NOT interact across subschema boundaries. An 'if' in one allOf branch MUST NOT affect 'then'/'else' in another branch.",
+      "x-since": "Draft-07"
+    },
+
+    "then": {
+      "title": "then",
+      "$ref": "#/definitions/schema",
+      "x-applies-to": "any",
+      "x-behavior": "Applied when 'if' validates successfully. Instance must also validate against this. Ignored if 'if' absent.",
+      "x-since": "Draft-07"
+    },
+
+    "else": {
+      "title": "else",
+      "$ref": "#/definitions/schema",
+      "x-applies-to": "any",
+      "x-behavior": "Applied when 'if' fails. Instance must validate against this. Ignored if 'if' absent.",
+      "x-since": "Draft-07"
+    },
+
+    "$ref": {
+      "title": "$ref",
+      "type": "string",
+      "format": "uri-reference",
+      "x-applies-to": "any",
+      "x-behavior": "Resolves to another schema, then validates instance against it. Draft 4-7: when $ref is present, ALL sibling keywords in the same object (including $id) are IGNORED for both validation and base URI resolution. The $ref value is a URI-reference resolved against the base URI of the PARENT scope (not own $id). '#' = nearest $id-bearing resource root (see x-ref-resolution). '#/path' = JSON Pointer relative to nearest resource root. External URI = remote schema (fetched or mapped to local directory). Mutual recursion (A->B->A): MUST NOT cause infinite loops; implementations validate lazily.",
+      "x-draft07-rule": "sibling keywords ignored — including $id",
+      "x-ref-resolution": {
+        "bare-hash": "'#' resolves to the root of the nearest enclosing schema resource — the schema identified by the nearest ancestor $id, NOT the document root. If no $id is present anywhere, '#' = document root.",
+        "json-pointer": "'#/path/to/node' resolves the JSON Pointer relative to the nearest enclosing resource root (nearest $id-bearing schema). Pointer unescape order: (1) ~1 → /, (2) ~0 → ~, (3) percent-decode (%XX). Single-pass from left to right.",
+        "anchor": "Fragment-only non-pointer like '#foo' is a plain name anchor. Resolved by scanning all subschemas for $id ending in '#foo' (Draft 4-7 anchor form).",
+        "relative": "Relative URI-reference (no scheme, no leading '/') resolved against the current resolution scope (nearest $id base URI).",
+        "absolute": "Full URI (with scheme) resolved directly. If the URI matches a known schema identity, use that schema. Otherwise load from remoteDir by stripping scheme+host.",
+        "remote": "HTTP(S) URIs are mapped to local files: strip scheme+host, look up 'remoteDir + path'. Try 'path' then 'path.json' if path has no extension. Each remote document is loaded with its own Loader, using the document URI as documentBase.",
+        "sibling-id-ignored": "When resolving $ref, the $id sibling on the same node is ignored. Base URI = parent scope (the scope BEFORE this node's own $id). This prevents the local $id from changing where $ref resolves to."
+      }
+    },
+
+    "definitions": {
+      "title": "definitions",
+      "type": "object",
+      "additionalProperties": { "$ref": "#/definitions/schema" },
+      "x-applies-to": "any",
+      "x-behavior": "Storage location for reusable subschemas. Referenced via $ref with JSON Pointer: '#/definitions/name'. Draft-07 uses 'definitions'. Draft 2019-09+ uses '$defs'.",
+      "default": {}
+    },
+
+    "$id": {
+      "title": "$id",
+      "type": "string",
+      "format": "uri-reference",
+      "x-behavior": "Sets the base URI (resolution scope) for the schema and all descendant subschemas that do not have their own $id. The value is a URI-reference resolved against the current base URI. Each schema node bearing $id is a 'resource root': '#' in a $ref within this subtree resolves to this node, not the document root. Root schema $id SHOULD be an absolute URI without fragment (trailing '#' is normalized away). Subschema $id may be absolute or relative. Fragment-only $id (e.g. '#foo') declares a named anchor. In Draft-04 this keyword is 'id' (no dollar sign).",
+      "x-scope-rule": "A subschema $id is IGNORED when $ref is present on the same node (Draft 4-7). The $id takes effect only if the node is reached without $ref.",
+      "x-resource-root": "Every node with a non-fragment $id defines a new resource root. '#' within that subtree points to this node. JSON Pointers in $ref are resolved from this node, not from the document root."
+    },
+
+    "$schema": {
+      "title": "$schema",
+      "type": "string",
+      "format": "uri",
+      "x-behavior": "Declares which JSON Schema dialect the schema uses. Applies to the entire document and must be at the root level. Does not apply to externally referenced ($ref) documents — those must declare their own $schema. MUST NOT appear in subschemas."
+    },
+
+    "format": {
+      "title": "format",
+      "type": "string",
+      "x-applies-to": "any",
+      "x-behavior": "Annotation only by default. Implementations MAY treat as assertion. Built-in Draft-07 formats: date-time, date, time, email, idn-email, hostname, idn-hostname, ipv4, ipv6, uri, uri-reference, iri, iri-reference, uri-template, json-pointer, relative-json-pointer, regex. When instance type does not match the format's target type, validation SHOULD succeed."
+    },
+
+    "contentMediaType": {
+      "title": "contentMediaType",
+      "type": "string",
+      "x-applies-to": "string",
+      "x-behavior": "Annotation. Describes MIME type of string content (e.g. 'application/json'). Implementations MAY validate.",
+      "x-since": "Draft-07"
+    },
+
+    "contentEncoding": {
+      "title": "contentEncoding",
+      "type": "string",
+      "x-applies-to": "string",
+      "x-behavior": "Annotation. Describes encoding of string content (e.g. 'base64'). Implementations MAY decode and validate.",
+      "x-since": "Draft-07"
+    },
+
+    "title":       { "type": "string", "x-role": "annotation" },
+    "description": { "type": "string", "x-role": "annotation" },
+    "default":     { "x-role": "annotation", "x-behavior": "Supplies a default value. NOT auto-filled by validators. Used by consumers (e.g. schema2object construction).", "x-spec-note": "RECOMMENDED that default value be valid against the associated schema." },
+    "examples":    { "type": "array", "items": true, "x-role": "annotation" },
+    "readOnly":    { "type": "boolean", "default": false, "x-role": "annotation", "x-merge-rule": "When multiple occurrences apply, result MUST be true if any occurrence is true." },
+    "writeOnly":   { "type": "boolean", "default": false, "x-role": "annotation", "x-merge-rule": "When multiple occurrences apply, result MUST be true if any occurrence is true." },
+    "$comment":    { "type": "string", "x-role": "annotation. MUST NOT be presented to end users." }
+  },
+
+  "x-type-assertion-rule": "Most keywords only constrain their target type. When instance type does not match target, the keyword passes (no constraint). Example: maxLength on a number = valid.",
+
+  "x-boolean-schema-rule": "true = accept everything, false = reject everything. A schema can be a boolean instead of an object.",
+
+  "x-keyword-independence": "Keywords operate independently except: additionalProperties depends on properties + patternProperties; additionalItems depends on items.",
+
+  "x-structuring": {
+    "$id": {
+      "description": "Sets base URI and resource root for the schema subtree.",
+      "rules": [
+        "Value is a URI-reference resolved against the current base URI.",
+        "Root $id SHOULD be an absolute URI; trailing '#' is normalized away.",
+        "Each non-fragment $id defines a new resource root — '#' within that subtree points here.",
+        "Fragment-only $id (e.g. '#foo') declares a named anchor (Draft 4-7 style).",
+        "Draft-04: keyword is 'id' (no dollar sign).",
+        "IGNORED when $ref is present on the same node (Draft 4-7 sibling rule)."
+      ]
+    },
+    "$anchor": {
+      "description": "Named anchor for a subschema. NOT a Draft-07 keyword — included for reference only.",
+      "rules": [
+        "Draft 4-7: anchors are declared via fragment-only $id, e.g. '$id': '#foo'.",
+        "Draft 2019-09+: dedicated '$anchor' keyword.",
+        "Referenced as fragment: 'https://example.com/schema#foo'."
+      ],
+      "x-since": "Draft 2019-09 (as $anchor keyword; Draft 4-7 uses $id with fragment)",
+      "x-not-in-draft-07": true
+    },
+    "$ref": {
+      "description": "Reference to another schema by URI-reference.",
+      "rules": [
+        "Value is a URI-reference resolved against the PARENT scope (not own $id — sibling $id ignored).",
+        "'#' = nearest $id-bearing resource root. If no $id anywhere, '#' = document root.",
+        "'#/path' = JSON Pointer resolved from nearest resource root, not document root.",
+        "'#anchor' = plain name anchor (scan for subschema $id = '#anchor' or absolute URI ending in '#anchor').",
+        "Relative URI resolved against current resolution scope (nearest $id base URI).",
+        "Absolute URI with scheme: if HTTP(S), strip scheme+host and look up in remoteDir.",
+        "Draft 4-7: ALL sibling keywords (including $id) are IGNORED when $ref is present.",
+        "Validators MUST NOT enter infinite loops; validate lazily (only when data exists at that depth)."
+      ]
+    },
+    "definitions": {
+      "description": "Standard location for reusable subschemas.",
+      "rules": [
+        "Draft-07: keyword is 'definitions'.",
+        "Draft 2019-09+: keyword is '$defs'.",
+        "Referenced via JSON Pointer: '$ref': '#/definitions/name'.",
+        "No special processing — purely a convention for $ref targets."
+      ]
+    },
+    "json-pointer": {
+      "description": "RFC 6901 JSON Pointer syntax and unescape rules.",
+      "rules": [
+        "Fragment form: '#/path/to/node'.",
+        "Each segment separated by '/'. Applied left-to-right.",
+        "Unescape order (single pass, left-to-right): (1) '~1' → '/', (2) '~0' → '~'.",
+        "Then percent-decode: '%XX' → character (e.g. '%25' → '%').",
+        "Array indices are numeric strings: '#/items/0'."
+      ]
+    },
+    "base-uri-resolution": {
+      "description": "How the resolution scope (base URI) is tracked and propagated.",
+      "rules": [
+        "1. Document is loaded with a base URI (retrieval URI or documentBase parameter).",
+        "2. When traversing into a subschema bearing $id: resolve $id against current base → new base.",
+        "3. Each $id-bearing node is a resource root. Store (scope, parentScope, resource) per node.",
+        "   scope = base URI after own $id; parentScope = base URI before own $id; resource = nearest resource root URI.",
+        "4. When resolving $ref: use parentScope (not scope) as base — sibling $id is ignored.",
+        "5. '#' resolves to the resource URI (nearest $id base), not the document root.",
+        "6. Anonymous schemas (no $id, no retrieval URI) use '' as base; '#' = empty string = document root."
+      ]
+    },
+    "remote-schema-loading": {
+      "description": "How external $ref URIs are resolved to local files.",
+      "rules": [
+        "HTTP(S) URIs: strip scheme ('http://' or 'https://') and host (up to first '/') → local path.",
+        "Look up: remoteDir + localPath. If not found and no extension, try remoteDir + localPath + '.json'.",
+        "Each remote document is parsed as a schema document with its URI as documentBase.",
+        "Create a new Loader for the remote document — do not reuse the parent Loader.",
+        "Remote documents are cached by URI to avoid re-loading (and infinite loops on circular refs)."
+      ]
+    },
+    "recursion": {
+      "description": "Self-referential schemas.",
+      "rules": [
+        "'$ref': '#' points to the nearest resource root — enables recursive structures.",
+        "Implementations MUST NOT enter infinite loops. Validate lazily: recurse only when data exists.",
+        "Mutual recursion (A → B → A): technically allowed by spec if data is finite."
+      ]
+    },
+    "bundling": {
+      "description": "Multiple schemas in one document.",
+      "rules": [
+        "A subschema with a non-fragment $id is a new resource root within the same document.",
+        "Draft 4-7: subschema $id only changes base URI scope — NOT an independent Schema Resource.",
+        "All schemas in a bundled Draft-07 document must use the same dialect."
+      ]
+    }
+  },
+
+  "x-regex": {
+    "description": "Regular expression rules for 'pattern' and 'patternProperties'.",
+    "dialect": "ECMA 262 with Unicode support",
+    "anchoring": "NOT anchored. Pattern matches anywhere in the string. Use ^...$ to anchor.",
+    "supported-subset": [
+      ". (any char except line break)",
+      "^ (start of string)",
+      "$ (end of string)",
+      "(...) (group)",
+      "| (alternation)",
+      "[abc] [a-z] [^abc] (character classes)",
+      "+ * ? (greedy quantifiers)",
+      "+? *? ?? (non-greedy)",
+      "(?!x) (?=x) (lookahead)",
+      "{x} {x,y} {x,} (range quantifiers)",
+      "{x,y}? {x,}? (non-greedy range)"
+    ],
+    "escaping": "Use \\n \\r \\t. Also apply JSON string escaping (double backslash).",
+    "multiline": "For multiline strings use (.|\\r?\\n)* instead of . with flags (flags not supported)."
+  },
+
+  "x-primitive-types": {
+    "boolean": {
+      "description": "Matches only true and false.",
+      "rules": [
+        "1, 0, '', null are NOT boolean.",
+        "boolean is NOT a subtype of integer or number."
+      ]
+    },
+    "null": {
+      "description": "Matches only null.",
+      "rules": [
+        "null is not equivalent to absent property.",
+        "A property with value null IS present — satisfies 'required'.",
+        "false, 0, '' are NOT null."
+      ]
+    }
+  },
+
+  "x-annotation-details": {
+    "readOnly": "Indicates data is managed by the owning authority. Clients SHOULD NOT send readOnly fields in write requests.",
+    "writeOnly": "Indicates data is meant for write only (e.g. passwords). Servers SHOULD NOT include writeOnly fields in responses.",
+    "default": "Supplies a default value. NOT auto-filled by validators. Consumers (like schema2object) use it during object construction.",
+    "examples": "Array of example values. Each must be valid against the schema (by convention, not enforced).",
+    "$comment": "For schema authors. MUST be ignored by implementations. Not for end users."
+  },
+
+  "x-annotation-rules": {
+    "negated-schemas": "Annotations in 'not' subschemas (at any depth) MUST be ignored. Annotations in failing branches of oneOf/anyOf/then/else MUST be ignored.",
+    "short-circuit": "Annotation keywords MUST be applied to all possible sub-instances, even when assertion evaluation could be short-circuited."
+  },
+
+  "x-schema2object": {
+    "$ref": "schema2object-api.json"
+  }
+}
