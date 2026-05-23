@@ -13,5 +13,6 @@ Current repository posture: JavaScript is the only active runtime implementation
 - [Handbook](./docs/handbook/index.html)
 - [Guided learning path](./docs/handbook/guide/01-mental-model.md)
 - [Usage guide](./docs/handbook/runtime/schema2object-usage.md)
+- [Changelog](./CHANGELOG.md)
 - [Runtime source](./js/schema2object.mjs)
 - [Examples](./js/examples/)

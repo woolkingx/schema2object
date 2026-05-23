@@ -23,6 +23,27 @@ Current repository posture: JavaScript is the only active runtime implementation
 - `node js/tests/validate.mjs`: 34/34
 - `node js/tests/draft07_suite.mjs`: 922/922
 
+## [0.6.1] - 2026-04-28
+
+### Fixed (JS)
+- **Cross-document defaults** — `_applyDefaults` now forwards the resolved sub-loader through cross-`$ref` recursion so multi-document defaults materialize with the correct resolver context.
+
+### Changed (Docs)
+- **Relocated JS docs** — moved `schema2object-api.json` and `schema2object-usage.md` under the JS documentation surface at the time of the release.
+- **Updated usage notes** — clarified lazy reads, construction-time validation, `$withDefaults()` materialization, and cross-`$ref` defaults behavior.
+
+## [0.6.0] - 2026-04-19
+
+### Changed (JS)
+- **Pointer/proxy/lazy performance baseline** — optimized the v0.5.x runtime model around direct schema lookup, cache lookup, default lookup, and lazy cursor access.
+- **Loader reuse** — added `WeakMap<schema, Loader>` reuse for `resolver = null`, reducing repeated constructor setup cost.
+- **Default value cache** — cached default lookup by `(loader, schema, key)` with a sentinel for missing defaults.
+- **Tree operation extraction** — extracted `_treeGet`, `_treeSet`, and `_treeDescriptor` with inline cache-hit fast paths.
+
+### Internal (JS)
+- Added direct `charCodeAt` pass-through checks and `_isSafeCacheLoader` guard for cache-safe loader reuse.
+- Cleaned old runtime version files into backup storage during the release branch preparation.
+
 ## [0.5.2] - 2026-04-15
 
 ### Changed (JS)
